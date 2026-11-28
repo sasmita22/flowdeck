@@ -5543,7 +5543,10 @@ describe("createEngineHandler", async () => {
           flows.save(workspaceFirst());
           const buildId = await builtId();
 
-          expect(await answer("run-options", { buildId })).toEqual({ kind: "choices" });
+          expect(await answer("run-options", { buildId })).toEqual({
+            kind: "choices",
+            variables: [],
+          });
         });
 
         it("offers the same Run choices for a build with an Always Gate", async () => {
@@ -5561,7 +5564,10 @@ describe("createEngineHandler", async () => {
           );
           const buildId = await builtId();
 
-          expect(await answer("run-options", { buildId })).toEqual({ kind: "choices" });
+          expect(await answer("run-options", { buildId })).toEqual({
+            kind: "choices",
+            variables: [],
+          });
         });
 
         it("answers with an error for a build it cannot load", async () => {

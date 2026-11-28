@@ -5,8 +5,19 @@ import {
   noBlueprintFacts,
   saveFlowResultSchema,
 } from "../../../src/core/flow/flow-store.js";
+import { unknownLibraries } from "../../../src/core/flow/libraries.js";
 import { parseFlow } from "../../../src/core/flow/schema.js";
-import { flowSettings, output, thenWire, trigger } from "../../fixtures/flow-builders.js";
+import { blueprintVariables } from "../../../src/core/flow/variables.js";
+import {
+  agent,
+  branch,
+  flowSettings,
+  onMainFlow,
+  output,
+  thenWire,
+  trigger,
+  wire,
+} from "../../fixtures/flow-builders.js";
 
 const libraryNode = (id: string, libraryId: string) => ({
   id,
@@ -31,6 +42,24 @@ describe("blueprintFacts", () => {
     });
 
     expect(blueprintFacts(flow, () => undefined).uses).toEqual(["on-path", "off-path"]);
+  });
+
+  it("lists the variables to ask: a not-defined one, never one an earlier Agent defines", () => {
+    const flow = onMainFlow(
+      [
+        agent("review", {
+          settings: { produces: [{ variable: "approved", yesIf: "ok", noIf: "not ok" }] },
+        }),
+        branch("decide", "approved"),
+        branch("docs", "docs"),
+      ],
+      [thenWire("review", "decide"), wire("decide", "yes", "docs", "in")],
+    );
+
+    const { variables } = blueprintFacts(flow, () => undefined);
+
+    expect(variables).toEqual(blueprintVariables(flow, unknownLibraries).toAsk);
+    expect(variables).toEqual([{ name: "docs", kind: "yes-no", nodeIds: ["docs"] }]);
   });
 
   it("uses no libraries when there is no saved blueprint", () => {
@@ -71,6 +100,7 @@ describe("flowSummarySchema", () => {
     kind: "workflow",
     sessions: [],
     uses: ["lib-a"],
+    sends: [],
   };
 
   it("keeps the latest version's Build configuration and the variables it finds", () => {

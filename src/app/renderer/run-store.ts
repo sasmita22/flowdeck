@@ -2,11 +2,11 @@ import { z } from "zod";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { Problem } from "../../core/compiler/problems.js";
 import { openedFlowSchema } from "../../core/flow/flow-store.js";
-import { labelPrefix, type LibraryLookup } from "../../core/flow/libraries.js";
+import { labelPrefix, unknownLibraries, type LibraryLookup } from "../../core/flow/libraries.js";
 import { mainFlow } from "../../core/flow/main-flow.js";
 import { Flow, type BuildConfig } from "../../core/flow/schema.js";
 import {
-  foundVariables,
+  blueprintVariables,
   groupVariables,
   type FoundVariable,
   type LibraryUse,
@@ -32,7 +32,7 @@ import {
   type PipelineItem,
 } from "../../core/run/pipeline.js";
 import { sessionFailureOf } from "../../core/run/session-watch.js";
-import { runChoicesSchema } from "../../core/run/options.js";
+import { runChoicesSchema, type RunVariable } from "../../core/run/options.js";
 import {
   runSnapshotSchema,
   startRunResultSchema,
@@ -73,7 +73,11 @@ type RunBridge = Pick<
 
 export type RunChoice = { auto: boolean };
 
-type RunDialog = { buildId: string };
+type RunDialog = {
+  buildId: string;
+  variables: RunVariable[];
+  values: Record<string, boolean>;
+};
 
 type IgnoredNode = { id: string; label: string };
 
@@ -124,6 +128,8 @@ type VariableGroup = {
   variables: FoundVariable[];
 };
 
+const toAsk = (flow: Flow): FoundVariable[] => blueprintVariables(flow, unknownLibraries).toAsk;
+
 export const variableGroups = (variables: readonly FoundVariable[]): VariableGroup[] => {
   const used = new Map<string, VariableGroup>();
   for (const variable of variables) {
@@ -169,7 +175,7 @@ const usedLibraries = (flow: Flow, uses: readonly LibraryUse[]): LibraryLookup =
   );
   return (libraryId) => {
     const use = byId.get(libraryId);
-    return use && { name: use.name, kind: use.kind, sessions: [], uses: [] };
+    return use && { name: use.name, kind: use.kind, sessions: [], uses: [], sends: [] };
   };
 };
 
@@ -254,6 +260,7 @@ export type RunState = {
   cancelBuild(): void;
   runBuild(buildId: string): Promise<null>;
   start(choice: RunChoice): Promise<string | null>;
+  setRunValue(name: string, value: boolean): void;
   cancelDialog(): void;
   dismissProblems(): void;
   deleteBuild(buildId: string): Promise<boolean>;
@@ -512,13 +519,13 @@ export const createRunStore = ({
       const source = { flowId, version, buildConfig: sessionFolder(flow) };
       const answer = expandAnswerSchema.safeParse(await bridge.expandFlow({ flow }));
       if (!answer.success) {
-        return { ...source, variables: foundVariables(flow), problem: unexpandable };
+        return { ...source, variables: toAsk(flow), problem: unexpandable };
       }
       if ("problem" in answer.data) {
-        return { ...source, variables: foundVariables(flow), problem: answer.data.problem };
+        return { ...source, variables: toAsk(flow), problem: answer.data.problem };
       }
       const { flow: expanded, uses } = answer.data;
-      return { ...source, variables: groupVariables(foundVariables(expanded), uses) };
+      return { ...source, variables: groupVariables(toAsk(expanded), uses) };
     };
 
     const startingBase = async ({ repo, base }: BuildConfig): Promise<string> => {
@@ -594,7 +601,14 @@ export const createRunStore = ({
       const choices = runChoicesSchema.safeParse(await bridge.runOptions({ buildId }));
       if (!choices.success) return { ok: false, error: "unexpected run options" };
       if (choices.data.kind === "error") return { ok: false, error: choices.data.message };
-      set({ dialog: { buildId } });
+      const { variables } = choices.data;
+      set({
+        dialog: {
+          buildId,
+          variables,
+          values: Object.fromEntries(variables.map(({ name, value }) => [name, value])),
+        },
+      });
       return { ok: true, value: null };
     };
 
@@ -782,10 +796,22 @@ export const createRunStore = ({
         const { dialog } = get();
         if (dialog === null) return null;
         const runId = await busy(async () =>
-          started(await bridge.runBuild({ buildId: dialog.buildId, auto })),
+          started(
+            await bridge.runBuild({
+              buildId: dialog.buildId,
+              auto,
+              ...(dialog.variables.length === 0 ? {} : { variables: dialog.values }),
+            }),
+          ),
         );
         if (runId !== null) set({ dialog: null });
         return runId;
+      },
+
+      setRunValue: (name, value) => {
+        const { dialog } = get();
+        if (dialog === null || !dialog.variables.some((variable) => variable.name === name)) return;
+        set({ dialog: { ...dialog, values: { ...dialog.values, [name]: value } } });
       },
 
       cancelDialog: () => set({ dialog: null }),

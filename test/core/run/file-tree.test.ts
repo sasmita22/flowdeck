@@ -4,7 +4,6 @@ import { fileTree } from "../../../src/core/run/file-tree.js";
 type FileTreeNode = ReturnType<typeof fileTree>[number];
 
 const lockedFiles = [
-  "plugin/templates/h.md",
   "manifest.json",
   "plugin/agents/b.md",
   "plugin/skills/review/SKILL.md",
@@ -39,7 +38,6 @@ const everyLevel = (nodes: FileTreeNode[]): FileTreeNode[][] => [
 describe("fileTree", () => {
   it.each([
     ["plugin/agents", "Agents", "plugin/agents/a.md"],
-    ["plugin/templates", "Hand-off templates", "plugin/templates/h.md"],
     ["plugin/skills", "Skills", "plugin/skills/review"],
     ["plugin/hooks", "Hooks", "plugin/hooks/hooks.json"],
   ])("puts what is under %s in a folder labelled %s", (path, label, child) => {
@@ -51,18 +49,14 @@ describe("fileTree", () => {
 
   it.each([
     ["workspace/plugin/agents", "Agents"],
-    ["workspace/plugin/templates", "Hand-off templates"],
     ["sessions/main/plugin/agents", "Agents"],
     ["sessions/main/plugin/skills", "Skills"],
-    ["sessions/main/plugin/templates", "Hand-off templates"],
     ["sessions/main/plugin/hooks", "Hooks"],
   ])("labels a container's plugin folder %s as %s", (path, label) => {
     const containerFiles = [
       "workspace/plugin/agents/r.md",
-      "workspace/plugin/templates/h.md",
       "sessions/main/plugin/agents/a.md",
       "sessions/main/plugin/skills/review/SKILL.md",
-      "sessions/main/plugin/templates/h.md",
       "sessions/main/plugin/hooks/hooks.json",
       "sessions/main/repo/plugin/agents/x.md",
     ];

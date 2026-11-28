@@ -3,7 +3,7 @@ import type { BuildCheckFailure } from "./check-build.js";
 import type { Manifest, ManifestContainer } from "./lower.js";
 import { containerRoot } from "./pieces.js";
 
-type PieceKind = "agent" | "template" | "workspace" | "shared";
+type PieceKind = "agent" | "workspace" | "shared";
 
 export const auditPiece = "build";
 
@@ -14,7 +14,6 @@ const insideContainer = (path: string) => path.replace(/^(workspace|sessions\/[^
 export const pieceKind = (path: string): PieceKind => {
   const local = insideContainer(path);
   if (local === "CLAUDE.md") return "workspace";
-  if (local.startsWith("plugin/templates/")) return "template";
   if (local.startsWith("plugin/skills/") || local.startsWith("plugin/commands/")) return "shared";
   return "agent";
 };

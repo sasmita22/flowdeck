@@ -66,7 +66,7 @@ describe("checkEdit refuses", () => {
 
   it("add_node settings that fail the type's settings schema", () => {
     expect(
-      refused("add_node", { type: "agent", label: "Planner", settings: { writes: "notes.md" } }),
+      refused("add_node", { type: "agent", label: "Planner", settings: { produces: "approved" } }),
     ).toContain(expectedArray);
   });
 
@@ -168,8 +168,20 @@ describe("checkEdit on a library node", () => {
 
   const libraries: LibraryLookup = (flowId) =>
     ({
-      "flow-a": { name: "Android", kind: "node-library" as const, sessions: [], uses: [] },
-      "flow-b": { name: "iOS App", kind: "node-library" as const, sessions: [], uses: [] },
+      "flow-a": {
+        name: "Android",
+        kind: "node-library" as const,
+        sessions: [],
+        uses: [],
+        sends: [],
+      },
+      "flow-b": {
+        name: "iOS App",
+        kind: "node-library" as const,
+        sessions: [],
+        uses: [],
+        sends: [],
+      },
     })[flowId];
 
   const addLibrary = (before: Flow, libraryId: string) =>
@@ -568,6 +580,36 @@ describe("editProblems", () => {
     const relabelled = flow([...mainNodes, { ...blank("stray"), label: "Renamed" }], mainWires);
 
     expect(editProblems(withStray, relabelled, ["stray"])).toEqual([]);
+  });
+});
+
+describe("change_node on a shared Branch", () => {
+  it("reports variable-unique when it renames the Branch to an earlier Branch's variable", () => {
+    const sharedBranch = {
+      ...branch("two", "other"),
+      settings: { variable: "other", shared: true },
+    };
+    const wires = [
+      thenWire("start", "one"),
+      wire("one", "yes", "two", "in"),
+      wire("one", "no", "two", "in"),
+    ];
+    const before = flow([trigger("start"), branch("one", "approved"), sharedBranch], wires);
+    const result = checkEdit(before, "change_node", {
+      nodeId: "two",
+      settings: { variable: "approved" },
+    });
+    const settings = result.ok && result.edit.tool === "change_node" ? result.edit.settings : {};
+    const after = {
+      ...before,
+      nodes: before.nodes.map((node) =>
+        node.id === "two" ? ({ ...node, settings } as typeof node) : node,
+      ),
+    };
+
+    expect(editProblems(before, after, ["two"])).toEqual([
+      expect.objectContaining({ rule: "variable-unique", node: "two" }),
+    ]);
   });
 });
 

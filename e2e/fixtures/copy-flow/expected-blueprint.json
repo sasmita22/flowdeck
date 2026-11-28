@@ -35,8 +35,7 @@
       "settings": {
         "role": "Reviewer of the repository",
         "instructions": "Read README.md and list the risks it finds.\nExpected output: review-notes.md, the risks found.",
-        "model": "sonnet",
-        "writes": ["review-notes.md"]
+        "model": "sonnet"
       }
     },
     {
@@ -50,8 +49,7 @@
       "settings": {
         "role": "",
         "instructions": "Read review-notes.md and update the plan to address each risk.",
-        "model": "sonnet",
-        "given": ["review-notes.md"]
+        "model": "sonnet"
       }
     },
     {

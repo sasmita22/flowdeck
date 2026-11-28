@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -11,7 +11,6 @@ import { openDatabase } from "../../src/adapters/sqlite/open-database.js";
 import { SqliteStore } from "../../src/adapters/sqlite/sqlite-store.js";
 import { TmuxSessionHost } from "../../src/adapters/tmux/tmux-session-host.js";
 import { prepareKit } from "../../src/adapters/node-fs/kit-copy.js";
-import { templateMarker, templatePath } from "../../src/core/compiler/handoff-templates.js";
 import { parseFlow, type Flow } from "../../src/core/flow/schema.js";
 import type { RunEvent } from "../../src/core/run/run-events.js";
 import type { HumanWaiter } from "../../src/core/run/wait.js";
@@ -54,8 +53,6 @@ type Step = {
   id: string;
   label: string;
   instructions: string;
-  given?: string[];
-  writes?: string[];
 };
 
 function liveFlow(steps: Step[]): Flow {
@@ -73,8 +70,6 @@ function liveFlow(steps: Step[]): Flow {
             role: "",
             instructions: step.instructions,
             model: "haiku",
-            ...(step.given === undefined ? {} : { given: step.given }),
-            ...(step.writes === undefined ? {} : { writes: step.writes }),
           },
         })),
         {
@@ -189,15 +184,12 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("built flows run with real cl
             id: "a1",
             label: "Write greeting",
             instructions: "Write the single word hello to greeting.txt.",
-            writes: ["greeting.txt"],
           },
           {
             type: "agent",
             id: "a2",
             label: "Shout greeting",
             instructions: "Read greeting.txt and write its word in capital letters to shout.txt.",
-            given: ["greeting.txt"],
-            writes: ["shout.txt"],
           },
           {
             type: "agent",
@@ -205,8 +197,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("built flows run with real cl
             label: "Count letters",
             instructions:
               "Read shout.txt and write the number of letters in its word to count.txt.",
-            given: ["shout.txt"],
-            writes: ["count.txt"],
           },
         ]);
         const waits: unknown[] = [];
@@ -276,9 +266,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("built flows run with real cl
           ["plan.md", "changes.md"].map(async (file) => ({
             file,
             content: await contentOrEmpty(join(workFolder ?? "", file)),
-            template: (
-              await readFile(join(dirname(workFolder ?? ""), templatePath(file)), "utf8")
-            ).trim(),
           })),
         );
         console.log(
@@ -293,12 +280,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("built flows run with real cl
         expect(rows.filter((row) => ["p1", "p2", "p3"].includes(row.node))).toEqual(
           ["p1", "p2", "p3"].map((node) => ({ node, finished: true, status: "done" })),
         );
-        for (const { content, template } of handedOn) {
-          expect(template).toContain(templateMarker);
-          expect(content).not.toBe("");
-          expect(content).not.toBe(template);
-          expect(content).not.toContain(templateMarker);
-        }
+        for (const { content } of handedOn) expect(content).not.toBe("");
       },
     );
   });
@@ -316,7 +298,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("built flows run with real cl
             label: "Write plan",
             instructions:
               'Write this one line to plan.md: "Plan: greet the user by name on the home page."',
-            writes: ["plan.md"],
           },
           {
             type: "agent",
@@ -324,8 +305,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("built flows run with real cl
             label: "Expand plan",
             instructions:
               "Read plan.md and write to steps.md two numbered steps that carry out that plan.",
-            given: ["plan.md"],
-            writes: ["steps.md"],
           },
           {
             type: "agent",
@@ -333,8 +312,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("built flows run with real cl
             label: "Review steps",
             instructions:
               "Read steps.md and write to review.md one line: OK, or the one problem you see. The flow ends here; the line is a record and nothing acts on it.",
-            given: ["steps.md"],
-            writes: ["review.md"],
           },
         ]);
         const built = await builds().saveAndBuild(flow, { name });

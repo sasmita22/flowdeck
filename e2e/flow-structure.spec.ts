@@ -17,7 +17,6 @@ import {
   flow,
   inOneSession,
   loop,
-  onWorkspaceMainFlow,
   workspaceFlow,
   output,
   thenWire,
@@ -27,9 +26,8 @@ import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
-import { buildAndRun, buildOnCanvas, runFromDetail, startInRunDialog } from "./build-run.js";
+import { buildOnCanvas, runFromDetail } from "./build-run.js";
 import { endSessionsOfHome } from "./own-sessions.js";
-import { workspaceFolder } from "../src/core/run/workspace.js";
 
 let home: string;
 let repo: TmpRepo;
@@ -37,11 +35,6 @@ let bin: string;
 let launched: LaunchedApp | undefined;
 
 const at = <N extends object>(node: N, x: number, y: number) => ({ ...node, position: { x, y } });
-
-const named = (id: string, label: string, settings: Record<string, unknown> = {}) => ({
-  ...agent(id, { settings }),
-  label,
-});
 
 const verdictDone = ["```json", '{"done": true}', "```"].join("\n");
 
@@ -199,8 +192,6 @@ const status = (window: Page, nodeId: string, round?: number) =>
 
 const seed = (input: Flow) => seedFlow(home, input, repo.path);
 
-const workFolder = (buildId: string) => workspaceFolder(join(home, "workspaces", buildId));
-
 test.beforeEach(async () => {
   launched = undefined;
   home = await mkdtemp(join(tmpdir(), "fd-fs-"));
@@ -335,74 +326,6 @@ test("A fresh Loop says on the canvas that its body needs an Agent", async () =>
     "Write when the loop is done.\nHas no agent in its body.",
   );
   await expect(window.getByText("LOOP · max 3")).toBeVisible();
-});
-
-test("Planner writes plan.md and Builder is given it, set in the inspector, and it survives a reload", async () => {
-  seed(
-    inOneSession(
-      [at(named("plan", "Planner"), 80, 160), at(named("build", "Builder"), 420, 160)],
-      [thenWire("plan", "build")],
-    ),
-  );
-  let window = await launch();
-  await expect(window.getByTestId("port-plan-file-out")).toHaveCount(0);
-  await expect(window.getByTestId("port-build-file-in")).toHaveCount(0);
-
-  await window.getByTestId("node-plan").click();
-  await window.getByTestId("node-setting-writes").fill("plan.md");
-  await window.getByTestId("node-setting-writes").blur();
-  await window.getByTestId("node-build").click();
-  await window.getByTestId("node-setting-given").fill("plan.md");
-  await window.getByTestId("node-setting-given").blur();
-
-  const settingsOf = async (id: string) =>
-    (await readout(window)).nodes.find((node) => node.id === id)?.settings;
-  await expect.poll(() => settingsOf("build")).toMatchObject({ given: ["plan.md"] });
-  await window.getByTestId(controlTestIds.save).click();
-  window = await relaunch();
-
-  expect(await settingsOf("plan")).toMatchObject({ writes: ["plan.md"] });
-  expect(await settingsOf("build")).toMatchObject({ given: ["plan.md"] });
-  expect((await readout(window)).wires).toEqual([thenWire("plan", "build")]);
-  await window.getByTestId("node-build").click();
-  await expect(window.getByTestId("node-setting-given")).toHaveValue("plan.md");
-  await darkShot(window, "handoff.png");
-});
-
-test("A run holds the reader until the file it is given is written", async () => {
-  seed(
-    onWorkspaceMainFlow(
-      [
-        at(named("plan", "Planner", { writes: ["plan.md"] }), 80, 160),
-        at(named("build", "Builder", { given: ["plan.md"] }), 420, 160),
-      ],
-      [thenWire("plan", "build")],
-    ),
-  );
-  const window = await launch();
-
-  const folder = workFolder(await buildAndRun(window, home, "handoff"));
-
-  await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("failed", {
-    timeout: 20_000,
-  });
-  const failedRun = latestRunId();
-  await window.getByTestId(pageTestIds.runStage(failedRun ?? "no-run", "build")).click();
-  await expect(
-    window.getByTestId(pageTestIds.runStageReason(failedRun ?? "no-run", "build")),
-  ).toHaveText("plan.md wasn't written by Planner");
-  expect(kindsOf(failedRun, "plan")).toEqual(["sent", "done"]);
-  expect(kindsOf(failedRun, "build")).toEqual(["running", "failed"]);
-
-  await writeFile(join(folder, "plan.md"), "- one\n");
-  await window.getByTestId(pageTestIds.runAgain).click();
-  await startInRunDialog(window);
-
-  await expect.poll(() => latestRunId(), { timeout: 20_000 }).not.toBe(failedRun);
-  await expect(status(window, "build")).toHaveAttribute("data-status", "done", {
-    timeout: 20_000,
-  });
-  expect(kindsOf(latestRunId(), "build")).toEqual(["sent", "done"]);
 });
 
 for (const container of ["loop"] as const) {

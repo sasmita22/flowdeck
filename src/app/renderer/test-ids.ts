@@ -37,6 +37,11 @@ export const controlTestIds = {
   blueprintSettings: "blueprint-settings",
 } as const;
 
+export const blueprintVariableTestIds = {
+  list: "blueprint-variables",
+  variable: (name: string) => `blueprint-variable-${name}`,
+} as const;
+
 export type ContainerField = "name" | "model" | "repo" | "branch";
 
 export type FrameGripSide = "top" | "left" | "right" | "bottom";
@@ -220,6 +225,7 @@ export const dialogTestIds = {
   auto: "run-dialog-auto",
   start: "run-dialog-start",
   cancel: "run-dialog-cancel",
+  variable: (name: string) => `run-dialog-variable-${name}`,
 } as const;
 
 export const buildDialogTestIds = {
@@ -252,8 +258,15 @@ export const buildDialogTestIds = {
 
 export const branchVariableTestId = "node-setting-variable";
 
-export const branchDecidedByTestId = "node-setting-decided-by";
-
-export const branchValueTestId = "node-setting-value";
+export const branchVariableExistingTestId = "node-setting-variable-existing";
 
 export const agentProducesTestId = "node-setting-produces";
+
+export const agentProducesAddTestId = "node-setting-produces-add";
+
+export const produceRowTestIds = {
+  variable: (index: number) => `node-setting-produces-${index}-variable`,
+  yesIf: (index: number) => `node-setting-produces-${index}-yes-if`,
+  noIf: (index: number) => `node-setting-produces-${index}-no-if`,
+  remove: (index: number) => `node-setting-produces-${index}-remove`,
+} as const;

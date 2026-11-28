@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   agentOutcome,
+  agentPrompt,
+  agentTurnNode,
   agentTurnText,
   agentType,
 } from "../../../../src/core/nodes/agent/execute.js";
 import { agentVerdictTurnText } from "../../../../src/core/nodes/loop/execute.js";
 import type { AgentCall } from "../../../../src/core/run/agent-calls.js";
 
-const bare = (id: string) => ({ id, given: [], writes: [] });
+const bare = (id: string) => ({ id });
 
 const promptOf = (text: string) => {
   const match = /the prompt ("(?:[^"\\]|\\.)*")/.exec(text);
@@ -27,75 +29,99 @@ describe("agentTurnText", () => {
     );
   });
 
-  it("puts the node's own given and written files between its marker and Go", () => {
-    const text = agentTurnText("h1", "review", {
-      id: "a1",
-      given: ["plan.md"],
-      writes: ["notes.md"],
-    });
-
-    expect(promptOf(text)).toBe("NODE a1\nYou are given: plan.md\nWrite: notes.md\nGo");
-  });
-
   it("puts the Ask answers inside the prompt, before Go", () => {
-    const text = agentTurnText("h1", "review", { id: "a1", given: ["plan.md"], writes: [] }, [
-      "red",
-      "blue",
-    ]);
+    const text = agentTurnText("h1", "review", bare("a1"), ["red", "blue"]);
 
-    expect(promptOf(text)).toBe(
-      "NODE a1\nYou are given: plan.md\nThe user answered: red. The user answered: blue.\nGo",
-    );
+    expect(promptOf(text)).toBe("NODE a1\nThe user answered: red. The user answered: blue.\nGo");
     expect(text.endsWith('". Then reply DONE.')).toBe(true);
   });
 
-  it("gives two nodes on one piece two prompts that differ in marker and details", () => {
-    const first = agentTurnText("h1", "review", { id: "a1", given: ["a.md"], writes: [] });
-    const second = agentTurnText("h1", "review", { id: "a2", given: ["b.md"], writes: [] });
+  it("gives two nodes on one piece two prompts that differ in marker", () => {
+    const first = agentTurnText("h1", "review", bare("a1"));
+    const second = agentTurnText("h1", "review", bare("a2"));
 
     expect(first).toContain('subagent_type "h1:review"');
     expect(second).toContain('subagent_type "h1:review"');
-    expect(promptOf(first)).toBe("NODE a1\nYou are given: a.md\nGo");
-    expect(promptOf(second)).toBe("NODE a2\nYou are given: b.md\nGo");
+    expect(promptOf(first)).toBe("NODE a1\nGo");
+    expect(promptOf(second)).toBe("NODE a2\nGo");
   });
 
   it("names the agent <prefix>:<node id> for a build that named no pieces", () => {
     expect(agentTurnText("h1", "a1", bare("a1"))).toContain('subagent_type "h1:a1"');
   });
+
+  it("never mentions given or written files", () => {
+    const text = agentTurnText("h1", "review", bare("a1"));
+
+    expect(text).not.toMatch(/You are given|Write:/);
+  });
 });
 
-describe("a turn for an Agent that produces a value", () => {
-  const producer = { ...bare("a1"), produces: "tests-passed" };
+describe("agentPrompt for an Agent that produces variables", () => {
+  const producer = {
+    id: "a1",
+    produces: [
+      { variable: "approved", yesIf: "tests pass", noIf: "tests fail" },
+      { variable: "docs", yesIf: "docs\nchanged", noIf: "no docs changed" },
+    ],
+  };
   const jsonRequests = (text: string) => text.match(/fenced code block tagged json/g) ?? [];
 
-  it("asks for a json answer under the value's own key, yes as true and no as false", () => {
+  it("lists each variable with its Yes if and No if as an acceptance criterion", () => {
+    const prompt = agentPrompt(producer);
+
+    expect(prompt.startsWith("NODE a1\n")).toBe(true);
+    expect(prompt).toMatch(/acceptance criteri/i);
+    expect(prompt).toContain('"approved": true if tests pass, false if tests fail');
+    expect(prompt).toContain('"docs": true if docs changed, false if no docs changed');
+  });
+
+  it("asks for one final fenced json object holding every variable", () => {
+    const prompt = agentPrompt(producer);
+
+    expect(jsonRequests(prompt)).toHaveLength(1);
+    expect(prompt).toContain('{"approved": true, "docs": true}');
+    expect(prompt.indexOf("Go")).toBeLessThan(prompt.indexOf("fenced code block"));
+  });
+
+  it("adds nothing for an Agent with no produce rows", () => {
+    expect(agentPrompt({ id: "a1", produces: [] })).toBe("NODE a1\nGo");
+  });
+
+  it("puts the produce lines into the subagent's prompt in the main session's turn", () => {
     const text = agentTurnText("h1", "review", producer);
 
-    expect(promptOf(text)?.startsWith("NODE a1\n")).toBe(true);
+    expect(promptOf(text)).toBe(agentPrompt(producer));
+  });
+
+  it("asks the main session to end with the agent's json object, naming every variable, instead of DONE", () => {
+    const text = agentTurnText("h1", "review", producer);
+    const ending = text.slice(text.lastIndexOf('". ') + 3);
+
     expect(text).not.toMatch(/Then reply DONE\.$/);
-    expect(jsonRequests(text)).toHaveLength(1);
-    expect(text).toContain('"tests-passed": true');
-    expect(text).toContain('"tests-passed": false');
+    expect(jsonRequests(ending)).toHaveLength(1);
+    expect(ending).toContain('{"approved": true, "docs": true}');
   });
 
-  it("asks for the answer once, in the main session's reply, not in the subagent's prompt", () => {
-    const text = agentTurnText("h1", "review", producer);
+  it("reads the rows from the Agent's settings", () => {
+    const node = agentTurnNode({
+      id: "a1",
+      settings: { role: "", instructions: "", model: "", produces: producer.produces },
+    });
 
-    expect(promptOf(text)).toBe("NODE a1\nGo");
+    expect(agentPrompt(node)).toBe(agentPrompt(producer));
   });
 
-  it("asks nothing more of an Agent that produces no value", () => {
-    expect(agentTurnText("h1", "review", bare("a1"))).toMatch(/Then reply DONE\.$/);
-  });
-
-  it("asks a Loop's last step that also produces a value for one block holding done and the value", () => {
+  it("asks a Loop's last step for one block holding done and every variable", () => {
     const text = agentVerdictTurnText("h1", "review", producer, "no issues left");
+    const ending = text.slice(text.lastIndexOf('". ') + 3);
 
-    expect(jsonRequests(text)).toHaveLength(1);
-    expect(text).toContain('"done": true');
-    expect(text).toContain('"tests-passed": true');
-    expect(text).toContain('"tests-passed": false');
-    expect(text).toContain("no issues left");
+    expect(promptOf(text)).toBe(agentPrompt(producer));
+    expect(jsonRequests(ending)).toHaveLength(1);
+    expect(ending).toContain('"done": true');
+    expect(ending).toContain('"approved": true');
+    expect(ending).toContain('"docs": true');
+    expect(ending).toContain("no issues left");
   });
 });
 

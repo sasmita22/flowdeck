@@ -21,16 +21,16 @@ export function roundTripFlow(): Flow {
     if (node === undefined) throw new Error(`all-types.json has no ${id} node`);
     return node.settings;
   };
-  settingsOf("plan").expectedOutput = "plan.md with numbered steps";
-  settingsOf("plan").writes = ["plan.md"];
-  settingsOf("build").given = ["plan.md"];
-  settingsOf("lint").produces = "clean";
+  settingsOf("lint").produces = [
+    { variable: "clean", yesIf: "lint exits 0", noIf: "lint exits non-zero" },
+    { variable: "fast", yesIf: "lint takes under a minute", noIf: "" },
+  ];
   flow.nodes.push({
     id: "ifclean",
     label: "Clean?",
     type: "branch",
     position: { x: 1500, y: 60 },
-    settings: { decidedBy: "value", variable: "", value: "clean" },
+    settings: { variable: "clean" },
   } as RawFlow["nodes"][number]);
   flow.wires = flow.wires.flatMap((wire) =>
     wire.from.node === "lint" && wire.to.node === "ife2e"

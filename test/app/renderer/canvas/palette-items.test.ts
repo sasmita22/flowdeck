@@ -380,6 +380,7 @@ describe("libraryItems", () => {
     kind,
     sessions: [],
     uses,
+    sends: [],
   });
 
   const summaries = [

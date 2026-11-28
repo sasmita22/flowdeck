@@ -9,9 +9,16 @@ import {
   describeFields,
   type FieldDescription,
 } from "../../../../src/app/renderer/inspector/schema-form.js";
+import type { LibraryLookup } from "../../../../src/core/flow/libraries.js";
 import { NodeType, type Node } from "../../../../src/core/flow/schema.js";
+import { blueprintVariables } from "../../../../src/core/flow/variables.js";
 import { registry } from "../../../../src/core/nodes/registry.js";
-import { agent, branch, flow, trigger } from "../../../fixtures/flow-builders.js";
+import {
+  agentProducesAddTestId,
+  branchVariableExistingTestId,
+  produceRowTestIds,
+} from "../../../../src/app/renderer/test-ids.js";
+import { agent, branch, onMainFlow, thenWire } from "../../../fixtures/flow-builders.js";
 import { z } from "zod";
 
 const summary = (field: FieldDescription) => [field.control, field.path.join("."), field.testId];
@@ -39,9 +46,7 @@ describe("describeNodeFields", () => {
         ["text", "role", "node-setting-role"],
         ["multiline", "instructions", "node-setting-instructions"],
         ["select", "model", "node-setting-model"],
-        ["list", "given", "node-setting-given"],
-        ["list", "writes", "node-setting-writes"],
-        ["text", "produces", "node-setting-produces"],
+        ["rows", "produces", "node-setting-produces"],
       ],
     ],
     [
@@ -76,13 +81,7 @@ describe("describeNodeFields", () => {
       ],
     ],
     ["library", []],
-    [
-      "branch",
-      [
-        ["select", "decidedBy", "node-setting-decided-by"],
-        ["text", "variable", "node-setting-variable"],
-      ],
-    ],
+    ["branch", [["combo", "variable", "node-setting-variable"]]],
   ])("describes the %s settings", (type, expected) => {
     expect(describeNodeFields(type).map(summary)).toEqual(expected);
   });
@@ -143,76 +142,151 @@ describe("describeNodeFields", () => {
     expect(paths).not.toContain("tools");
   });
 
-  it("takes a Branch variable as a typed name, with nothing to pick from", () => {
-    const [, variable] = describeNodeFields("branch", flow([trigger("T"), branch("B", "")], []));
+  describe("a Branch's Variable name", () => {
+    const blueprint = onMainFlow(
+      [branch("first", "approved"), branch("second", "docs"), branch("third", "approved")],
+      [thenWire("first", "second"), thenWire("second", "third")],
+    );
 
-    expect(variable).toEqual({
-      control: "text",
-      path: ["variable"],
-      testId: "node-setting-variable",
-      label: "Yes/no variable",
+    it("is the only field: a name typed freely, with the other Branch variables to pick from", () => {
+      const fields = describeNodeFields(
+        "branch",
+        blueprint,
+        { variable: "docs" },
+        {
+          nodeId: "second",
+        },
+      );
+
+      expect(fields).toEqual([
+        {
+          control: "combo",
+          path: ["variable"],
+          testId: "node-setting-variable",
+          existingTestId: branchVariableExistingTestId,
+          label: "Variable name",
+          options: ["approved"],
+        },
+      ]);
+    });
+
+    it("offers a name this Branch shares with another Branch, once", () => {
+      const [variable] = describeNodeFields(
+        "branch",
+        blueprint,
+        { variable: "approved" },
+        {
+          nodeId: "first",
+        },
+      );
+
+      expect(variable).toMatchObject({ options: ["docs", "approved"] });
+    });
+
+    it("offers nothing on a blueprint with no other Branch", () => {
+      const lone = onMainFlow([branch("only", "approved")], []);
+
+      const [variable] = describeNodeFields(
+        "branch",
+        lone,
+        { variable: "approved" },
+        {
+          nodeId: "only",
+        },
+      );
+
+      expect(variable).toMatchObject({ options: [] });
     });
   });
 
-  describe("a Branch's Decided by", () => {
-    const producer = (id: string, produces?: string) =>
-      agent(id, produces === undefined ? {} : { settings: { produces } });
-    const producers = flow(
-      [
-        trigger("T"),
-        producer("check", "tests-passed"),
-        producer("plain"),
-        producer("review", "approved"),
-        producer("again", "tests-passed"),
-        branch("B", ""),
-      ],
-      [],
+  describe("an Agent's produce rows", () => {
+    const sendsUp: LibraryLookup = (flowId) =>
+      flowId === "asks"
+        ? { name: "asks", kind: "node-library", sessions: [], uses: [], sends: ["up"] }
+        : undefined;
+    const library = {
+      id: "lib",
+      label: "lib",
+      position: { x: 0, y: 0 },
+      type: "library",
+      settings: { libraryId: "asks", label: "lib", overrides: {} },
+    };
+    const blueprint = onMainFlow(
+      [agent("check"), branch("decide", "approved"), branch("docs", "docs"), library],
+      [thenWire("check", "decide"), thenWire("decide", "docs"), thenWire("docs", "lib")],
     );
+    const rows = {
+      produces: [
+        { variable: "approved", yesIf: "tests pass", noIf: "tests fail" },
+        { variable: "", yesIf: "", noIf: "" },
+      ],
+    };
+    const producesField = (settings: Record<string, unknown>) => {
+      const field = describeNodeFields("agent", blueprint, settings, {
+        nodeId: "check",
+        libraries: sendsUp,
+      }).find(({ path }) => path[0] === "produces");
+      if (field?.control !== "rows") throw new Error("expected produce rows");
+      return field;
+    };
 
-    it("offers a build variable, the default, or a value an earlier Agent produces", () => {
-      const [decidedBy] = describeNodeFields("branch", producers);
+    it("shows one row per produced variable, with an add button and a remove button per row", () => {
+      const field = producesField(rows);
 
-      expect(decidedBy).toMatchObject({
-        control: "select",
-        path: ["decidedBy"],
-        testId: "node-setting-decided-by",
-        label: "Decided by",
-        options: ["variable", "value"],
-        optionLabels: {
-          variable: "A build variable",
-          value: "A value an earlier Agent produces",
-        },
-      });
-    });
-
-    it("shows a build variable as picked when a Branch has no Decided by", () => {
-      const [decidedBy] = describeNodeFields("branch", producers, { variable: "deep" });
-
-      expect(decidedBy).toMatchObject({ fallback: "variable" });
-    });
-
-    it.each<[string, Record<string, unknown>]>([
-      ["with no Decided by, as old blueprints have", { variable: "deep" }],
-      ["decided by a build variable", { decidedBy: "variable", variable: "deep" }],
-    ])("shows the variable name field for a Branch %s", (_, settings) => {
-      expect(describeNodeFields("branch", producers, settings).map(summary)).toEqual([
-        ["select", "decidedBy", "node-setting-decided-by"],
-        ["text", "variable", "node-setting-variable"],
+      expect(field.label).toBe("Variables it produces");
+      expect(field.addLabel).toBe("+ Produce variable");
+      expect(field.addTestId).toBe(agentProducesAddTestId);
+      expect(field.rows.map(({ removeTestId }) => removeTestId)).toEqual([
+        produceRowTestIds.remove(0),
+        produceRowTestIds.remove(1),
+      ]);
+      expect(field.rows.map(({ fields }) => fields.map(summary))).toEqual([
+        [
+          ["select", "produces.0.variable", produceRowTestIds.variable(0)],
+          ["text", "produces.0.yesIf", produceRowTestIds.yesIf(0)],
+          ["text", "produces.0.noIf", produceRowTestIds.noIf(0)],
+        ],
+        [
+          ["select", "produces.1.variable", produceRowTestIds.variable(1)],
+          ["text", "produces.1.yesIf", produceRowTestIds.yesIf(1)],
+          ["text", "produces.1.noIf", produceRowTestIds.noIf(1)],
+        ],
       ]);
     });
 
-    it("shows a value picker listing each value the flow's Agents produce, once, in place of the variable", () => {
-      const fields = describeNodeFields("branch", producers, {
-        variable: "",
-        decidedBy: "value",
-        value: "tests-passed",
-      });
-
-      expect(fields.map(summary)).toEqual([
-        ["select", "decidedBy", "node-setting-decided-by"],
-        ["select", "value", "node-setting-value"],
+    it("names the row ids from the row index and field", () => {
+      expect([
+        produceRowTestIds.variable(0),
+        produceRowTestIds.yesIf(0),
+        produceRowTestIds.noIf(2),
+        produceRowTestIds.remove(1),
+        agentProducesAddTestId,
+      ]).toEqual([
+        "node-setting-produces-0-variable",
+        "node-setting-produces-0-yes-if",
+        "node-setting-produces-2-no-if",
+        "node-setting-produces-1-remove",
+        "node-setting-produces-add",
       ]);
-      expect(fields[1]).toMatchObject({ options: ["tests-passed", "approved"] });
+    });
+
+    it("labels each row's fields in plain words", () => {
+      const [first] = producesField(rows).rows;
+
+      expect(first?.fields.map(({ label }) => label)).toEqual(["Variable name", "Yes if", "No if"]);
+    });
+
+    it("offers exactly the blueprint's own variables in each row: its Branch variables and what its libraries send up", () => {
+      const [first] = producesField(rows).rows;
+      const owned = blueprintVariables(blueprint, sendsUp).owned.map(({ name }) => name);
+
+      expect(first?.fields[0]).toMatchObject({ options: owned });
+      expect(owned).toEqual(["approved", "docs", "up"]);
+    });
+
+    it("shows no rows for an Agent that produces nothing, or was saved before rows existed", () => {
+      expect(producesField({ produces: [] }).rows).toEqual([]);
+      expect(producesField({}).rows).toEqual([]);
     });
   });
 
@@ -279,8 +353,8 @@ describe("applyNodeSetting", () => {
     ["join", ["wait"], "first", { wait: "first" }],
     ["join", ["onBranchFail"], "skip", { wait: "all", onBranchFail: "skip" }],
     ["branch", ["variable"], "deep", { variable: "deep" }],
-    ["branch", ["decidedBy"], "value", { decidedBy: "value" }],
-    ["agent", ["produces"], "tests-passed", { produces: "tests-passed" }],
+    ["branch", ["variable"], { pick: "deep" }, { variable: "deep", shared: true }],
+    ["agent", ["produces"], { row: "add" }, { produces: [{ variable: "", yesIf: "", noIf: "" }] }],
   ])("sets %s %s and keeps the settings valid", (type, path, value, expected) => {
     const before = nodeOf(type);
 
@@ -302,19 +376,90 @@ describe("applyNodeSetting", () => {
     expect(result).toEqual({ error: reason });
   });
 
-  it("picks the value a value-decided Branch reads", () => {
-    const valueMode = applied(nodeOf("branch"), ["decidedBy"], "value");
+  it("marks a Branch variable picked from the other Branches as shared, and a typed one as not", () => {
+    const picked = applied(nodeOf("branch"), ["variable"], { pick: "approved" });
+    const typed = applied(picked, ["variable"], "approved");
 
-    expect(applied(valueMode, ["value"], "tests-passed").settings).toMatchObject({
-      decidedBy: "value",
-      value: "tests-passed",
+    expect(picked.settings).toEqual({ variable: "approved", shared: true });
+    expect(typed.settings).toEqual({ variable: "approved" });
+  });
+
+  it("refuses to set a Branch's shared mark directly", () => {
+    expect(applyNodeSetting(nodeOf("branch"), ["shared"], true)).toEqual({
+      error: "This setting is locked",
     });
   });
 
-  it("refuses done as a produced value, the name a Loop's verdict uses", () => {
-    expect(applyNodeSetting(nodeOf("agent"), ["produces"], "done")).toEqual({
+  it("adds produce rows one after another, each empty", () => {
+    const once = applied(nodeOf("agent"), ["produces"], { row: "add" });
+    const twice = applied(once, ["produces"], { row: "add" });
+
+    expect(twice.settings).toMatchObject({
+      produces: [
+        { variable: "", yesIf: "", noIf: "" },
+        { variable: "", yesIf: "", noIf: "" },
+      ],
+    });
+  });
+
+  it("adds a produce row to an Agent saved before rows existed", () => {
+    const old = nodeOf("agent", { role: "", instructions: "Go.", model: "sonnet" });
+
+    expect(applied(old, ["produces"], { row: "add" }).settings).toEqual({
+      role: "",
+      instructions: "Go.",
+      model: "sonnet",
+      produces: [{ variable: "", yesIf: "", noIf: "" }],
+    });
+  });
+
+  it("fills one field of one produce row and leaves the others", () => {
+    const two = nodeOf("agent", {
+      ...nodeDefaults.agent.settings,
+      produces: [
+        { variable: "approved", yesIf: "", noIf: "" },
+        { variable: "docs", yesIf: "", noIf: "" },
+      ],
+    });
+
+    const yes = applied(two, ["produces", "1", "yesIf"], "docs changed");
+    const renamed = applied(yes, ["produces", "0", "variable"], "ship");
+
+    expect(renamed.settings).toMatchObject({
+      produces: [
+        { variable: "ship", yesIf: "", noIf: "" },
+        { variable: "docs", yesIf: "docs changed", noIf: "" },
+      ],
+    });
+  });
+
+  it("removes row 0 of two and keeps only the other in the settings", () => {
+    const two = nodeOf("agent", {
+      ...nodeDefaults.agent.settings,
+      produces: [
+        { variable: "approved", yesIf: "a", noIf: "b" },
+        { variable: "docs", yesIf: "c", noIf: "d" },
+      ],
+    });
+
+    expect(applied(two, ["produces", "0"], { row: "remove" }).settings).toMatchObject({
+      produces: [{ variable: "docs", yesIf: "c", noIf: "d" }],
+    });
+  });
+
+  it("refuses done as a produced variable, the name a Loop's verdict uses", () => {
+    const row = applied(nodeOf("agent"), ["produces"], { row: "add" });
+
+    expect(applyNodeSetting(row, ["produces", "0", "variable"], "done")).toEqual({
       error: expect.stringContaining("done") as string,
     });
+  });
+
+  it("never offers a given-files or written-file field", () => {
+    const paths = describeNodeFields("agent").map((field) => field.path.join("."));
+
+    expect(paths).not.toContain("given");
+    expect(paths).not.toContain("writes");
   });
 
   it("keeps the loop cap when the text is not a number", () => {

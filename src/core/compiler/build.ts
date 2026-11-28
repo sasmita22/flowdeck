@@ -5,7 +5,7 @@ import { canonicalJson } from "./canonical-json.js";
 import { emit, reportPath, type EmitTarget } from "./emit.js";
 import { hashBuild } from "./hash.js";
 import { lower, type BuildFile, type Manifest } from "./lower.js";
-import { validate, type ValidationError } from "./validate.js";
+import { validateExpanded, type ValidationError } from "./validate.js";
 import type { VerifyFileSystem } from "./verify.js";
 
 export type BuildFileSystem = VerifyFileSystem & {
@@ -39,7 +39,7 @@ type LayDownResult = { ok: true; files: BuildFile[] } | { ok: false; errors: Val
 export const workspaceDir = (home: string, id: string) => `${home}/workspaces/${id}`;
 
 export async function layDown(flow: Flow, deps: LayDownDeps): Promise<LayDownResult> {
-  const errors = validate(flow);
+  const errors = validateExpanded(flow);
   if (errors.length > 0) return { ok: false, errors };
   const { id, name, values, ...target } = deps.workspace;
   const workspace = workspaceDir(deps.home, id);

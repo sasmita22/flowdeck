@@ -455,8 +455,28 @@ describe("buildVersion", () => {
           ticketConfig,
         );
 
-      const builtValues = async (values: Record<string, boolean>) => {
-        const { fs, deps } = setup({ flows: [shipFlow()] });
+      const definedFlow = () =>
+        withConfig(
+          onMainFlow(
+            [
+              agent("check", {
+                settings: { produces: [{ variable: "ship", yesIf: "green", noIf: "red" }] },
+              }),
+              branch("decide", "ship"),
+              agent("release"),
+              agent("hold"),
+            ],
+            [
+              thenWire("check", "decide"),
+              wire("decide", "yes", "release", "in"),
+              wire("decide", "no", "hold", "in"),
+            ],
+          ),
+          ticketConfig,
+        );
+
+      const builtValues = async (values: Record<string, boolean>, flow = shipFlow()) => {
+        const { fs, deps } = setup({ flows: [flow] });
         const result = await buildVersion(v1, { name: "fix-login", repo, values }, deps);
         if (!result.ok) throw new Error(`build failed: ${errorMessages(result).join("; ")}`);
         return (JSON.parse(await fs.readFile(`${result.dir}/manifest.json`)) as Manifest).values;
@@ -468,6 +488,10 @@ describe("buildVersion", () => {
 
       it("keeps a true the request gives", async () => {
         expect(await builtValues({ ship: true })).toStrictEqual({ ship: true });
+      });
+
+      it("gives a variable an Agent defines before the Branch no entry", async () => {
+        expect(await builtValues({}, definedFlow())).toStrictEqual({});
       });
     });
   });
@@ -2774,6 +2798,32 @@ describe("buildVersion", () => {
       expect(oneSession(manifest).nodes.find((node) => node.id === "android-app-plan")?.label).toBe(
         "Planner",
       );
+    });
+
+    it("builds a host whose library branches on a variable it defines", async () => {
+      const branching = parseFlow({
+        nodes: [
+          trigger("canvas-start"),
+          agent("review", {
+            settings: { produces: [{ variable: "approved", yesIf: "fine", noIf: "broken" }] },
+          }),
+          branch("decide", "approved"),
+          output("canvas-stop"),
+        ],
+        wires: [
+          thenWire("canvas-start", "review"),
+          thenWire("review", "decide"),
+          wire("decide", "yes", "canvas-stop", "in"),
+          wire("decide", "no", "canvas-stop", "in"),
+        ],
+        containers: [],
+        settings: flowSettings,
+      });
+      const t = withLibrary(branching);
+
+      const result = await buildVersion(v1, request, t.deps);
+
+      expect(result.ok ? [] : errorMessages(result)).toEqual([]);
     });
 
     it("is refused with the library-use problem when its library is a workflow", async () => {

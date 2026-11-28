@@ -364,7 +364,6 @@ describe("the core run path", () => {
           store,
           runId: id,
           manifest: build,
-          cwd: repo.path,
           auto: false,
           socketPath: join(home, "sockets", "fd-run-abcd1234.sock"),
           open: async () => noClaude,
@@ -416,7 +415,6 @@ describe("the core run path", () => {
           store,
           runId: id,
           manifest: build,
-          cwd: repo.path,
           auto: false,
           socketPath: join(home, "sockets", "fd-run-abcd1234.sock"),
           open: async () => noClaude,
@@ -525,7 +523,6 @@ describe("the core run path", () => {
           store: runs,
           runId: id,
           manifest: loadedBuild,
-          cwd: workspaceFolder(twoSessionsDir),
           auto: false,
           socketPath: join(home, "sockets", "fd-run-abcd1234.sock"),
           open: async () => {
@@ -776,7 +773,6 @@ describe("execute wiring", () => {
         store,
         runId: id,
         manifest: options.manifest,
-        cwd: "/repo",
         auto: false,
         socketPath: "/fd/sockets/fd-run-abcd1234.sock",
         open: async () => ({
@@ -836,7 +832,6 @@ describe("execute wiring", () => {
         store,
         runId: id,
         manifest,
-        cwd: "/repo",
         auto: false,
         socketPath: "/fd/sockets/fd-run-abcd1234.sock",
         open: async () => ({
@@ -879,7 +874,7 @@ describe("execute wiring", () => {
     const { code, sends } = await executeWith({ manifest: agentBuild(1), waiter, usage });
 
     expect(waiter.calls).toEqual([]);
-    expect(sends).toEqual([agentTurnText("fix-login", "n1", { id: "n1", given: [], writes: [] })]);
+    expect(sends).toEqual([agentTurnText("fix-login", "n1", { id: "n1" })]);
     expect(code).toBe(0);
   });
 
@@ -896,10 +891,7 @@ describe("execute wiring", () => {
       compacts: true,
     });
 
-    expect(sends).toEqual([
-      "/compact",
-      agentTurnText("fix-login", "n1", { id: "n1", given: [], writes: [] }),
-    ]);
+    expect(sends).toEqual(["/compact", agentTurnText("fix-login", "n1", { id: "n1" })]);
     expect(code).toBe(0);
   });
 
@@ -1031,7 +1023,6 @@ describe("execute wiring", () => {
         store,
         runId,
         manifest,
-        cwd: "/repo",
         auto: false,
         socketPath: "/fd/sockets/fd-run-abcd1234.sock",
         open: async () => ({
@@ -1213,7 +1204,6 @@ describe("AT-19: a build that named no pieces", () => {
         store,
         runId,
         manifest,
-        cwd: "/repo",
         auto: false,
         socketPath: "/fd/sockets/fd-run-fd61.sock",
         actions: async () =>
@@ -1253,9 +1243,7 @@ describe("AT-19: a build that named no pieces", () => {
     );
 
     expect(code).toBe(0);
-    expect(sends).toEqual([
-      agentTurnText("fix-login-workspace", "p2", { id: "p2", given: [], writes: [] }),
-    ]);
+    expect(sends).toEqual([agentTurnText("fix-login-workspace", "p2", { id: "p2" })]);
     expect(store.findRun(runId)?.status).toBe("done");
     const charged = Object.fromEntries(
       store

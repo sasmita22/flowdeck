@@ -23,7 +23,7 @@ function stored(entries: [string, RunEvent][]): StoredEvent[] {
 }
 
 const agentTurn = (id: string, ended: boolean, lastAssistantText?: string): TranscriptTurn => ({
-  userText: agentTurnText(prefix, id, { id, given: [], writes: [] }),
+  userText: agentTurnText(prefix, id, { id }),
   ended,
   ...(lastAssistantText === undefined ? {} : { lastAssistantText }),
 });
@@ -108,7 +108,7 @@ describe("decideResume", () => {
 
   it("settles a hash-named build's Agent from a turn sent under its hash, its prefix", () => {
     const oldTurn = (id: string, lastAssistantText: string): TranscriptTurn => ({
-      userText: agentTurnText(hash, id, { id, given: [], writes: [] }),
+      userText: agentTurnText(hash, id, { id }),
       ended: true,
       lastAssistantText,
     });
@@ -181,7 +181,7 @@ describe("decideResume", () => {
     const agentManifest = { hash, prefix, nodes: [node("a1", "agent")] };
     const events = stored([["a1", sent]]);
     const turn = (ended: boolean): TranscriptTurn => ({
-      userText: agentTurnText(prefix, "a1", { id: "a1", given: [], writes: [] }, ["blue"]),
+      userText: agentTurnText(prefix, "a1", { id: "a1" }, ["blue"]),
       ended,
       ...(ended ? { lastAssistantText: "DONE" } : {}),
     });
@@ -209,7 +209,7 @@ describe("decideResume", () => {
     });
     const markerTurns: TranscriptTurn[] = [
       {
-        userText: `${agentTurnText(prefix, "a1", { id: "a1", given: [], writes: [] })} ${agentTurnText(prefix, "a2", { id: "a2", given: [], writes: [] })}`,
+        userText: `${agentTurnText(prefix, "a1", { id: "a1" })} ${agentTurnText(prefix, "a2", { id: "a2" })}`,
         ended: true,
         lastAssistantText: "DONE",
       },
@@ -220,8 +220,8 @@ describe("decideResume", () => {
         [
           {
             userText: forkTurnText(prefix, [
-              { id: "a1", piece: "a1", given: [], writes: [] },
-              { id: "a2", piece: "a2", given: [], writes: [] },
+              { id: "a1", piece: "a1" },
+              { id: "a2", piece: "a2" },
             ]),
             ended: true,
           },
@@ -291,7 +291,7 @@ describe("decideResume", () => {
       ended: boolean,
       lastAssistantText?: string,
     ): TranscriptTurn => ({
-      userText: agentTurnText(prefix, "review", { id, given: [], writes: [] }),
+      userText: agentTurnText(prefix, "review", { id }),
       ended,
       ...(lastAssistantText === undefined ? {} : { lastAssistantText }),
     });
@@ -362,8 +362,8 @@ describe("decideResume", () => {
       ]);
       const forkTurn: TranscriptTurn = {
         userText: forkTurnText(prefix, [
-          { id: "b1", piece: "review", given: [], writes: [] },
-          { id: "b2", piece: "review", given: [], writes: [] },
+          { id: "b1", piece: "review" },
+          { id: "b2", piece: "review" },
         ]),
         ended: true,
         lastAssistantText: "Both done.",
@@ -515,25 +515,22 @@ describe("decideResume", () => {
     ).toEqual({});
   });
 
-  it("reuses the answer given at a Branch that asked for its value, and asks again with none", () => {
+  it("gives a Branch no human action, since a Branch never asks", () => {
     const manifest = { hash, prefix, nodes: [node("c1", "agent"), node("b1", "branch")] };
-    const asked: [string, RunEvent][] = [
-      ["c1", sent],
-      ["c1", done],
-      ["b1", { kind: "needs-you" }],
-    ];
     const decision = { nodeId: "b1", decision: "answered" as const, answer: "yes" };
 
     expect(
       decideResume({
         manifest,
-        events: stored([...asked, ["b1", { kind: "answered", payload: decision }]]),
+        events: stored([
+          ["c1", sent],
+          ["c1", done],
+          ["b1", { kind: "needs-you" }],
+          ["b1", { kind: "answered", payload: decision }],
+        ]),
         turns: [],
       }),
-    ).toEqual({ b1: { kind: "reuse", decision } });
-    expect(decideResume({ manifest, events: stored(asked), turns: [] })).toEqual({
-      b1: { kind: "ask" },
-    });
+    ).toEqual({});
   });
 
   it("asks again at a Conditional Gate that was checking its condition when the runner stopped", () => {

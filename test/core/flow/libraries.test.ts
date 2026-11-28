@@ -134,8 +134,40 @@ const loosePath = (member: unknown): Flow =>
     [workspaceContainer(["w-start", "w-stop"])],
   );
 
+const producing = (id: string, variable: string) =>
+  agent(id, { settings: { produces: [{ variable, yesIf: "it holds", noIf: "it does not" }] } });
+
+const decidingLibrary = (members: { id: string }[], after: unknown[] = []): Flow => {
+  const ids = members.map(({ id }) => id);
+  const decide = ids.indexOf("decide");
+  const before = ids.slice(0, decide + 1);
+  const rest = ids.slice(decide + 1);
+  const next = rest[0] ?? "canvas-stop";
+  return plain(
+    [trigger("canvas-start"), ...members, ...after, output("canvas-stop")],
+    [
+      ...chain(["canvas-start", ...before]),
+      wire("decide", "yes", next, "in"),
+      wire("decide", "no", next, "in"),
+      ...chain([...rest, "canvas-stop"]).filter(() => rest.length > 0),
+    ],
+  );
+};
+
 const nodeById = (flow: Flow, id: string): Node | undefined =>
   flow.nodes.find((node) => node.id === id);
+
+const branchVariableOf = (flow: Flow, id: string): string | undefined => {
+  const node = nodeById(flow, id);
+  return node?.type === "branch" ? node.settings.variable : undefined;
+};
+
+const producedOf = (flow: Flow, id: string): string[] | undefined => {
+  const node = nodeById(flow, id);
+  return node?.type === "agent"
+    ? node.settings.produces?.map(({ variable }) => variable)
+    : undefined;
+};
 
 const instructionsOf = (flow: Flow, id: string): string | undefined => {
   const node = nodeById(flow, id);
@@ -456,6 +488,7 @@ describe("libraryLookup", () => {
         },
       ],
       uses: [],
+      sends: [],
     });
     expect(lookup("missing")).toBeUndefined();
   });
@@ -478,6 +511,18 @@ describe("libraryLookup", () => {
 
     expect(lookup("outer")?.uses).toEqual(["sessions", "spare"]);
     expect(lookup("sessions")?.uses).toEqual([]);
+  });
+
+  it("gives the Branch variables a library sends up: the ones it does not define", () => {
+    const lookup = libraryLookup(
+      resolverOf({
+        asks: decidingLibrary([branch("decide", "approved")]),
+        defines: decidingLibrary([producing("review", "approved"), branch("decide", "approved")]),
+      }),
+    );
+
+    expect(lookup("asks")?.sends).toEqual(["approved"]);
+    expect(lookup("defines")?.sends).toEqual([]);
   });
 
   it("lists the sessions of the expanded library, under the ids its overrides use", () => {
@@ -504,7 +549,13 @@ describe("blueprintFacts", () => {
   it("reads a host whose library is missing as if it used none", () => {
     const facts = blueprintFacts(loosePath(libraryNode("use", "missing", "use")), () => undefined);
 
-    expect(facts).toEqual({ kind: "workflow", variables: [], sessions: [], uses: ["missing"] });
+    expect(facts).toEqual({
+      kind: "workflow",
+      variables: [],
+      sessions: [],
+      uses: ["missing"],
+      sends: [],
+    });
   });
 
   it("lets an error that is not a library error through", () => {
@@ -556,11 +607,18 @@ describe("expandLibraries", () => {
     expect(nodeById(flow, "android-app-plan")?.label).toBe("Write the plan");
   });
 
-  it("prefixes variables by every library label on the way down, top first", () => {
+  it("prefixes text variables by every library label on the way down, top first, and leaves a Branch variable nobody defines unqualified", () => {
     const store = new FakeFlowStore();
-    const tests = store.save(nodeLibrary([branch("full", "isFullScan")], ["full"]), {
-      name: "E2E tests",
-    });
+    const tests = store.save(
+      nodeLibrary(
+        [
+          branch("full", "isFullScan"),
+          agent("scan", { settings: { instructions: "Scan {{scope}}" } }),
+        ],
+        ["full", "scan"],
+      ),
+      { name: "E2E tests" },
+    );
     const android = store.save(
       nodeLibrary([libraryNode("use-tests", tests.flowId, "e2e-tests")], ["use-tests"]),
       { name: "Android" },
@@ -576,14 +634,116 @@ describe("expandLibraries", () => {
     const { flow, uses } = expandLibraries(host, storeResolver(store));
 
     const expanded = nodeById(flow, "android-app-e2e-tests-full");
-    expect(expanded?.type === "branch" && expanded.settings.variable).toBe(
-      "android-app.e2e-tests.isFullScan",
+    expect(expanded?.type === "branch" && expanded.settings.variable).toBe("isFullScan");
+    expect(instructionsOf(flow, "android-app-e2e-tests-scan")).toBe(
+      "Scan {{android-app.e2e-tests.scope}}",
     );
     expect(instructionsOf(flow, "own")).toBe("Fix {{ticket}}");
     expect(uses).toEqual([
       { path: "android-app", name: "Android", kind: "node-library" },
       { path: "android-app.e2e-tests", name: "E2E tests", kind: "node-library" },
     ]);
+  });
+
+  it("qualifies a Branch variable the library defines, and the produce row that defines it, with its label", () => {
+    const store = new FakeFlowStore();
+    const { flowId } = store.save(
+      decidingLibrary([producing("review", "approved"), branch("decide", "approved")]),
+      { name: "Review" },
+    );
+    const host = onMainFlow([libraryNode("use", flowId, "Review Step")], []);
+
+    const { flow } = expandLibraries(host, storeResolver(store));
+
+    expect(branchVariableOf(flow, "review-step-decide")).toBe("review-step.approved");
+    expect(producedOf(flow, "review-step-review")).toEqual(["review-step.approved"]);
+  });
+
+  it("leaves a Branch variable nobody in the library defines unqualified, to be sent up", () => {
+    const store = new FakeFlowStore();
+    const { flowId } = store.save(decidingLibrary([branch("decide", "approved")]), {
+      name: "Review",
+    });
+    const host = onMainFlow([libraryNode("use", flowId, "review")], []);
+
+    const { flow } = expandLibraries(host, storeResolver(store));
+
+    expect(branchVariableOf(flow, "review-decide")).toBe("approved");
+  });
+
+  it("gives each copy of a library that defines its variable its own qualified name", () => {
+    const store = new FakeFlowStore();
+    const { flowId } = store.save(
+      decidingLibrary([producing("review", "approved"), branch("decide", "approved")]),
+      { name: "Review" },
+    );
+    const host = onMainFlow(
+      [libraryNode("one", flowId, "review"), libraryNode("two", flowId, "review-2")],
+      [thenWire("one", "two")],
+    );
+
+    const { flow } = expandLibraries(host, storeResolver(store));
+
+    expect(branchVariableOf(flow, "review-decide")).toBe("review.approved");
+    expect(branchVariableOf(flow, "review-2-decide")).toBe("review-2.approved");
+    expect(producedOf(flow, "review-2-review")).toEqual(["review-2.approved"]);
+  });
+
+  it("composes the qualified name per level when every level defines the same variable", () => {
+    const store = new FakeFlowStore();
+    const inner = store.save(
+      decidingLibrary([producing("review", "approved"), branch("decide", "approved")]),
+      { name: "Inner" },
+    );
+    const outer = store.save(
+      decidingLibrary([
+        producing("review", "approved"),
+        branch("decide", "approved"),
+        libraryNode("use-inner", inner.flowId, "inner"),
+      ]),
+      { name: "Outer" },
+    );
+    const host = onMainFlow(
+      [
+        producing("review", "approved"),
+        branch("decide", "approved"),
+        libraryNode("use-outer", outer.flowId, "outer"),
+      ],
+      [
+        thenWire("review", "decide"),
+        wire("decide", "yes", "use-outer", "in"),
+        wire("decide", "no", "use-outer", "in"),
+      ],
+    );
+
+    const { flow } = expandLibraries(host, storeResolver(store));
+
+    expect(
+      ["decide", "outer-decide", "outer-inner-decide"].map((id) => branchVariableOf(flow, id)),
+    ).toEqual(["approved", "outer.approved", "outer.inner.approved"]);
+    expect(
+      ["review", "outer-review", "outer-inner-review"].map((id) => producedOf(flow, id)),
+    ).toEqual([["approved"], ["outer.approved"], ["outer.inner.approved"]]);
+  });
+
+  it("keeps a variable nobody defines unqualified through every level", () => {
+    const store = new FakeFlowStore();
+    const inner = store.save(decidingLibrary([branch("decide", "approved")]), { name: "Inner" });
+    const outer = store.save(
+      nodeLibrary(
+        [agent("plan"), libraryNode("use-inner", inner.flowId, "inner")],
+        ["plan", "use-inner"],
+      ),
+      { name: "Outer" },
+    );
+    const host = onMainFlow(
+      [agent("plan"), libraryNode("use-outer", outer.flowId, "outer")],
+      [thenWire("plan", "use-outer")],
+    );
+
+    const { flow } = expandLibraries(host, storeResolver(store));
+
+    expect(branchVariableOf(flow, "outer-inner-decide")).toBe("approved");
   });
 
   it("gives each copy of one library its own variables", () => {

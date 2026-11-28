@@ -95,7 +95,11 @@ export type EngineCalls = {
   buildProject(payload: { buildId: string }): Promise<unknown>;
   buildEntries(payload: { buildId: string; path: string }): Promise<unknown>;
   pendingBuildTree(payload: { pendingId: string }): Promise<unknown>;
-  runBuild(payload: { buildId: string; auto?: boolean }): Promise<unknown>;
+  runBuild(payload: {
+    buildId: string;
+    auto?: boolean;
+    variables?: Record<string, boolean>;
+  }): Promise<unknown>;
   listRuns(): Promise<unknown>;
   loadRun(payload: { runId: string }): Promise<unknown>;
   stepFullText(payload: { runId: string; entryId: number }): Promise<unknown>;

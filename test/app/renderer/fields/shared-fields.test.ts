@@ -81,6 +81,21 @@ describe("same setting, same field", () => {
     },
   );
 
+  it.each(["build-dialog.tsx", "run-dialog.tsx"])(
+    "%s draws its variables with the shared VariableField and defines none of its own",
+    (file) => {
+      expect(fieldsImportedFromSharedModule(file)).toContain("VariableField");
+      expect(sourceOf(file)).toMatch(/<VariableField\b/);
+      expect(sourceOf(file)).not.toMatch(/function VariableField\b/);
+    },
+  );
+
+  it("the Run dialog gives each variable field its own Run dialog test id", () => {
+    expect(sourceOf("run-dialog.tsx")).toMatch(
+      /<VariableField\b[^>]*testId=\{dialogTestIds\.variable\(/,
+    );
+  });
+
   it("Blueprint settings draws the build model with the same model field as the Build dialog, under its own test id", () => {
     const files = blueprintSettingsFiles();
     expect(files).toHaveLength(1);

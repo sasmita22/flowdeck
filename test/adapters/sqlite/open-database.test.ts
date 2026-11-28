@@ -64,6 +64,7 @@ const allMigrations = [
   { name: "026_build_snapshot_flow.sql" },
   { name: "027_drop_unknown_node_types.sql" },
   { name: "028_drop_removed_gate_nodes.sql" },
+  { name: "029_drop_old_branch_and_agent_settings.sql" },
 ];
 
 const migrationsTo021 = allMigrations.filter(({ name }) => name < "022");

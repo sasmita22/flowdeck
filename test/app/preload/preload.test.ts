@@ -81,7 +81,7 @@ describe("preload run-state wiring", () => {
     ["buildProject", "flowdeck:build-project", { buildId: "b1" }],
     ["buildEntries", "flowdeck:build-entries", { buildId: "b1", path: "shop/src" }],
     ["pendingBuildTree", "flowdeck:pending-build-tree", { pendingId: "pending-1" }],
-    ["runBuild", "flowdeck:run-build", { buildId: "b1", auto: true }],
+    ["runBuild", "flowdeck:run-build", { buildId: "b1", auto: true, variables: { deep: false } }],
     ["runOptions", "flowdeck:run-options", { buildId: "b1" }],
     ["stopRun", "flowdeck:stop-run", { runId: "run-1" }],
     ["deleteBuild", "flowdeck:delete-build", { buildId: "b1" }],
@@ -204,6 +204,7 @@ describe("preload run-state wiring", () => {
     expectTypeOf<Parameters<EngineCalls["runBuild"]>[0]>().toEqualTypeOf<{
       buildId: string;
       auto?: boolean;
+      variables?: Record<string, boolean>;
     }>();
     expectTypeOf<Parameters<EngineCalls["runOptions"]>[0]>().toEqualTypeOf<{ buildId: string }>();
     expectTypeOf<Parameters<EngineCalls["deleteBuild"]>[0]>().toEqualTypeOf<{ buildId: string }>();

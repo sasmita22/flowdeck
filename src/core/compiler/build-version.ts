@@ -1,11 +1,16 @@
 import { z } from "zod";
 import { latestLibraries, type FlowStore } from "../flow/flow-store.js";
 import { flowSvg } from "../flow/flow-svg.js";
-import { expandLibraries, LibraryError, libraryLookup } from "../flow/libraries.js";
+import {
+  expandLibraries,
+  LibraryError,
+  libraryLookup,
+  unknownLibraries,
+} from "../flow/libraries.js";
 import { mainFlowOnly } from "../flow/main-flow.js";
 import type { Flow, SessionContainer } from "../flow/schema.js";
 import { isWorkflow, libraryBuildReason } from "../flow/structure.js";
-import { foundVariables, type VariableValues } from "../flow/variables.js";
+import { blueprintVariables, foundVariables, type VariableValues } from "../flow/variables.js";
 import type { FolderState } from "../flow/workspace-info.js";
 import type { AgentCall } from "../run/agent-calls.js";
 import {
@@ -54,7 +59,10 @@ import { buildRecord } from "./record.js";
 import { rule as libraryLabels } from "./rules/library-labels.js";
 import { rule as libraryLoops } from "./rules/library-loops.js";
 import { rule as libraryUse } from "./rules/library-use.js";
-import { validate, type ValidationError } from "./validate.js";
+import { rule as variableClash } from "./rules/variable-clash.js";
+import { rule as variableDot } from "./rules/variable-dot.js";
+import { rule as variableUnique } from "./rules/variable-unique.js";
+import { validate, validateExpanded, type ValidationError } from "./validate.js";
 import { workspaceListing, workspaceRootFiles } from "./verify.js";
 
 export type BuildRequest = {
@@ -122,7 +130,7 @@ const kebabCase = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 const withDefaults = (flow: Flow, values: VariableValues): VariableValues => ({
   ...Object.fromEntries(
-    foundVariables(flow).flatMap((variable) =>
+    blueprintVariables(flow, unknownLibraries).toAsk.flatMap((variable) =>
       variable.kind === "yes-no" ? [[variable.name, false]] : [],
     ),
   ),
@@ -310,7 +318,14 @@ export type StartedBuild = { kind: "started"; pendingId: string };
 
 type StartBuildResult = { ok: false; errors: ValidationError[] } | (StartedBuild & { flow: Flow });
 
-const libraryRules = new Set([libraryUse.id, libraryLabels.id, libraryLoops.id]);
+const libraryRules = new Set([
+  libraryUse.id,
+  libraryLabels.id,
+  libraryLoops.id,
+  variableUnique.id,
+  variableClash.id,
+  variableDot.id,
+]);
 
 type Expansion = { ok: false; errors: ValidationError[] } | { ok: true; flow: Flow };
 
@@ -347,7 +362,7 @@ export async function startBuild(
     frozen === undefined ? expandedHost(saved, deps) : { ok: true, flow: frozen };
   if (!expanded.ok) return expanded;
   const flow = mainFlowOnly(withRequestTarget(expanded.flow, request));
-  const errors = validate(flow);
+  const errors = validateExpanded(flow);
   if (errors.length > 0) return { ok: false, errors };
   const problems = await requestProblems(request, flow, deps).catch((error: unknown) => {
     if (error instanceof BuildStopped) return undefined;
@@ -399,8 +414,6 @@ const sharedFile = (manifest: Manifest, entry: BuildReport["shared"][number]): s
   return container === undefined ? [] : [sharedPath(entry, containerRoot(container))];
 };
 
-const templateFolder = /^(workspace|sessions\/[^/]+)\/plugin\/templates\//;
-
 const componentsOf = (
   manifest: Manifest,
   files: readonly BuildFile[],
@@ -411,7 +424,6 @@ const componentsOf = (
       node.type === "agent" && node.file !== undefined ? [node.file] : [],
     ),
   ),
-  ...files.flatMap((file) => (templateFolder.test(file.path) ? [file.path] : [])),
   ...shared.flatMap((entry) => sharedFile(manifest, entry)),
 ];
 
@@ -861,7 +873,7 @@ export async function runBuild(
                 listing.paths.map(async (path) => ({ path, content: await listing.read(path) })),
               ),
             );
-      failures = checkBuild({ laidDown: files, readBack: back, manifest, flow, shared });
+      failures = checkBuild({ laidDown: files, readBack: back, manifest, shared });
       if (failures.length === 0) {
         const { hash, manifest: locked } = await settled(
           lockBuild(deps.fs, dir, lockedFiles(back, manifest)),

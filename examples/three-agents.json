@@ -20,9 +20,8 @@
       },
       "settings": {
         "role": "",
-        "instructions": "Write a plan for the ticket.",
-        "model": "sonnet",
-        "writes": ["plan.md"]
+        "instructions": "Write a plan for the ticket to plan.md.",
+        "model": "sonnet"
       }
     },
     {
@@ -35,10 +34,8 @@
       },
       "settings": {
         "role": "",
-        "instructions": "Implement the plan.",
-        "model": "sonnet",
-        "given": ["plan.md"],
-        "writes": ["changes.md"]
+        "instructions": "Implement the plan in plan.md, then write what changed to changes.md.",
+        "model": "sonnet"
       }
     },
     {
@@ -51,9 +48,8 @@
       },
       "settings": {
         "role": "",
-        "instructions": "Summarise what changed.",
-        "model": "sonnet",
-        "given": ["changes.md"]
+        "instructions": "Summarise what changed, from changes.md.",
+        "model": "sonnet"
       }
     },
     {

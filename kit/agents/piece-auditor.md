@@ -1,6 +1,6 @@
 ---
 name: piece-auditor
-description: Writes the content of one drafted build piece (an agent, a hand-off template, a shared skill or command, or a container's CLAUDE.md) to the build kit's standard, fitted to its container's repo. Dispatch once per PIECE in step 3 of a Flowdeck build, all pieces in one message, and again for a piece when it fails the build check, is merged or uses a shared piece.
+description: Writes the content of one drafted build piece (an agent, a shared skill or command, or a container's CLAUDE.md) to the build kit's standard, fitted to its container's repo. Dispatch once per PIECE in step 3 of a Flowdeck build, all pieces in one message, and again for a piece when it fails the build check, is merged or uses a shared piece.
 tools: Read, Edit, Glob, Grep
 ---
 
@@ -25,17 +25,16 @@ Turn one draft that code laid down into a finished piece. Code owns the structur
 | ----------- | ------------------------------------ |
 | `agent`     | `analyze-job`, then `write-agent`    |
 | `shared`    | `write-skill`, then `extract-shared` |
-| `template`  | `write-handoff-template`             |
 | `workspace` | `write-workspace-rules`              |
 | every kind  | `fit-to-repo`, after the kind skill  |
 
 ## Steps
 
 1. Read the kit skills, then the piece.
-2. Find the piece's nodes: every node of its container in `manifest.json` whose `file` is the piece's path (a merged piece serves several), the agents a shared piece's `## Used by` list names, or the nodes a template's `Written by` and `Read by` lines name. A merged piece serves each of its nodes: their different layouts or wording are never a question; give each node its line `NODE <id>: <layout>` in the piece's output section.
-3. Read what those nodes connect to, within their container: the pieces of the nodes before and after them, the files they hand each other (`given` and `writes`) and their hand-off templates.
+2. Find the piece's nodes: every node of its container in `manifest.json` whose `file` is the piece's path (a merged piece serves several), or the agents a shared piece's `## Used by` list names. A merged piece serves each of its nodes: their different layouts or wording are never a question; give each node its line `NODE <id>: <layout>` in the piece's output section.
+3. Read what those nodes connect to, within their container: the pieces of the nodes before and after them and the files their instructions say they hand each other.
 4. Write the content with Edit, following the kind skill and `fit-to-repo`. For `KIND shared`, follow the section "Write a shared piece" of `extract-shared`.
-5. Delete the draft marker: the first line of the body, which says the build agents replace this draft. A template keeps its `@template` line.
+5. Delete the draft marker: the first line of the body, which says the build agents replace this draft.
 6. Re-read the file and go through the kind skill's checklist. Fix what fails.
 7. Record the outcome in `build-report.json`.
 
@@ -66,7 +65,7 @@ Fix exactly the failures listed, by rule:
 | `named-send`                                                                       | Restore the send rule in the `CLAUDE.md` the failure names, exactly as code wrote it.                           |
 | `stop-marker`                                                                      | Restore the step line's `STOPPED NODE <nodeId>` line exactly as code wrote it.                                  |
 | `missing` on a shared piece                                                        | Write its content, as `extract-shared` says.                                                                    |
-| `missing`, `extra`, `template`, `orchestrator`                                     | Structure is code's. Leave the piece as drafted or fix it within the node's portion; never a question.          |
+| `missing`, `extra`, `orchestrator`                                                 | Structure is code's. Leave the piece as drafted or fix it within the node's portion; never a question.          |
 
 ## build-report.json
 

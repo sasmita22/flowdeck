@@ -37,8 +37,8 @@ const longLabel = "Review the draft spec against the ticket and list every gap f
 const sample = (): Flow =>
   onMainFlow(
     [
-      labelled(agent("p", { settings: { writes: ["spec.md"] } }), "Draft the spec"),
-      labelled(agent("a", { settings: { given: ["spec.md"] } }), longLabel),
+      labelled(agent("p"), "Draft the spec"),
+      labelled(agent("a"), longLabel),
       labelled(agent("s"), "Ship it"),
     ],
     [thenWire("p", "a"), thenWire("a", "s")],
@@ -143,7 +143,6 @@ const workspace = async (source: Flow = sample()): Promise<BuildCheckInputs> => 
     laidDown,
     readBack: laidDown.map(filledOne),
     manifest: manifestOf(laidDown),
-    flow: source,
     shared: [],
   };
 };
@@ -216,18 +215,14 @@ const merged = async (): Promise<BuildCheckInputs & { kept: string }> => {
     laidDown,
     readBack: laidDown.map(filledOne),
     manifest,
-    flow: source,
     shared: [],
     kept: keptFile,
   };
 };
 
 describe("checkBuild", () => {
-  it("passes a workspace whose pieces are filled and whose other files are untouched, templates keeping their @template line", async () => {
-    const inputs = await workspace();
-
-    expect(inputs.readBack.map((file) => file.path)).toContain(inRoot("plugin/templates/spec.md"));
-    expect(checkBuild(inputs)).toEqual([]);
+  it("passes a workspace whose pieces are filled and whose other files are untouched", async () => {
+    expect(checkBuild(await workspace())).toEqual([]);
   });
 
   describe("AT-2: the structure is complete", () => {
@@ -407,37 +402,6 @@ describe("checkBuild", () => {
   });
 
   describe("references", () => {
-    it("names a hand-off file whose template is missing", async () => {
-      expectFailsOn(
-        without(await workspace(), inRoot("plugin/templates/spec.md")),
-        inRoot("plugin/templates/spec.md"),
-      );
-    });
-
-    it("asks no template for a hand-off file that is not markdown", async () => {
-      const base = sample();
-      const plain: Flow = {
-        ...base,
-        nodes: base.nodes.map((node) =>
-          node.type === "agent" && (node.id === "p" || node.id === "a")
-            ? {
-                ...node,
-                settings: {
-                  ...node.settings,
-                  [node.id === "p" ? "writes" : "given"]: ["spec.md", "greeting.txt"],
-                },
-              }
-            : node,
-        ),
-      };
-      const inputs = await workspace(plain);
-      const readBack = inputs.readBack.filter(
-        (file) => file.path !== inRoot("plugin/templates/greeting.txt"),
-      );
-
-      expect(checkBuild({ ...inputs, readBack })).toEqual([]);
-    });
-
     it("names a file that references a piece this build does not have", async () => {
       const inputs = await workspace();
       const file = fileOf(inputs, "a");
@@ -580,7 +544,6 @@ describe("checkBuild", () => {
         laidDown: applied.files,
         readBack,
         manifest: applied.manifest,
-        flow: source,
         shared: applied.accepted,
         path: sharedPath(entry, root),
       };
@@ -701,7 +664,6 @@ describe("checkBuild per container", () => {
       laidDown,
       readBack: laidDown.map(fillContainerFile),
       manifest: manifestOf(laidDown),
-      flow: source,
       shared: [],
     };
   };
@@ -847,7 +809,6 @@ describe("checkBuild per container", () => {
         laidDown,
         readBack: laidDown.map(fillContainerFile),
         manifest: manifestOf(laidDown),
-        flow: source,
         shared: [],
       };
     };

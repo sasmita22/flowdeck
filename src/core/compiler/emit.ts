@@ -4,7 +4,6 @@ import { handoffFolderLine } from "../flow/handoff.js";
 import { emptyReport } from "./build-report.js";
 import { canonicalJson } from "./canonical-json.js";
 import { guardHookFiles } from "./guard-hooks.js";
-import { handoffTemplates } from "./handoff-templates.js";
 import { sha256Hex } from "./hash.js";
 import {
   buildHookCommand,
@@ -272,7 +271,6 @@ const containerFiles = (
     : workspaceSessionClaudeMd(named, target, containers, connections);
   const inRoot = (file: BuildFile): BuildFile => ({ ...file, path: `${root}/${file.path}` });
   return [
-    ...handoffTemplates({ nodes: container.nodes }, repo).map(inRoot),
     orchestratorSkill(container, scope),
     ...guardHookFiles().map(inRoot),
     { path: `${root}/settings.json`, content: canonicalJson(settings) },

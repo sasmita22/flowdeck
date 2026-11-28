@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import type { ManifestNode } from "../../../../src/core/compiler/lower.js";
 import { branchDecision, branchSkips, portOf } from "../../../../src/core/nodes/branch/execute.js";
+import type { StoredEvent } from "../../../../src/core/run/store.js";
 import { parseFlow } from "../../../../src/core/flow/schema.js";
 import {
   agent,
@@ -44,66 +44,50 @@ const skipsOf = (
   });
 };
 
-const oldTrigger = (id: string, flags: Record<string, unknown>): ManifestNode => ({
-  id,
-  type: "trigger",
-  label: id,
-  settings: { inputs: [], flags } as unknown as ManifestNode["settings"],
-});
-
 describe("branchDecision", () => {
-  const workspaceManifest = (values: Record<string, string | boolean>) => ({
-    prefix: "fix-login",
-    layout: "workspace" as const,
-    values,
-    nodes: flow([trigger("start"), branch("b", "proceed-e2e")], [thenWire("start", "b")]).nodes,
+  const done = (nodeId: string, variables?: Record<string, boolean>, seq = 1): StoredEvent => ({
+    kind: "done",
+    nodeId,
+    seq,
+    time: "t",
+    ...(variables === undefined ? {} : { payload: { variables } }),
+  });
+  const decide = (events: StoredEvent[], values: Record<string, string | boolean> = {}) =>
+    branchDecision(events, values, { variable: "approved" });
+
+  it.each([
+    [true, "yes"],
+    [false, "no"],
+  ] as const)("takes the side an earlier Agent set: %s is %s", (answer, port) => {
+    expect(decide([done("check", { approved: answer })])).toBe(port);
   });
 
-  it("takes yes when the build's value for the Branch's variable is true", () => {
+  it("reads the latest Agent that set it", () => {
     expect(
-      branchDecision(workspaceManifest({ "proceed-e2e": true }), { variable: "proceed-e2e" }),
+      decide([done("first", { approved: false }, 1), done("second", { approved: true }, 2)]),
     ).toBe("yes");
   });
 
-  it("takes no when the build's value for the Branch's variable is false", () => {
-    expect(
-      branchDecision(workspaceManifest({ "proceed-e2e": false }), { variable: "proceed-e2e" }),
-    ).toBe("no");
+  it("reads a produced value over the run's value", () => {
+    expect(decide([done("check", { approved: false })], { approved: true })).toBe("no");
   });
 
-  it("keeps the value written into the build over any run flag of the same name", () => {
-    expect(
-      branchDecision(workspaceManifest({ "proceed-e2e": true }), { variable: "proceed-e2e" }),
-    ).toBe("yes");
+  it("skips done events that set other variables, then reads the run's value", () => {
+    expect(decide([done("plan"), done("check", { docs: false })], { approved: true })).toBe("yes");
+  });
+
+  it.each([
+    [true, "yes"],
+    [false, "no"],
+  ] as const)("takes the run's value with no producer: %s is %s", (answer, port) => {
+    expect(decide([], { approved: answer })).toBe(port);
   });
 
   it.each([
     ["has no value", {}],
-    ["holds text", { "proceed-e2e": "yes" }],
-  ])("throws naming the variable when the build %s for it", (_, values) => {
-    expect(() => branchDecision(workspaceManifest(values), { variable: "proceed-e2e" })).toThrow(
-      /proceed-e2e/,
-    );
-  });
-
-  it("throws for a manifest that carries no values, reading no Trigger flag", () => {
-    const valueless = {
-      nodes: [oldTrigger("start", { "proceed-e2e": true }), ...workspaceManifest({}).nodes],
-    };
-
-    expect(() =>
-      branchDecision(valueless as unknown as Parameters<typeof branchDecision>[0], {
-        variable: "proceed-e2e",
-      }),
-    ).toThrow(/proceed-e2e/);
-  });
-
-  it("decides by the variable name only, never an old flag key", () => {
-    expect(() =>
-      branchDecision(workspaceManifest({ e2e: true }), { flag: "e2e" } as unknown as Parameters<
-        typeof branchDecision
-      >[1]),
-    ).toThrow();
+    ["holds text", { approved: "yes" }],
+  ])("has no side when no Agent set it and the run %s for it", (_, values) => {
+    expect(decide([done("plan")], values)).toBeUndefined();
   });
 });
 

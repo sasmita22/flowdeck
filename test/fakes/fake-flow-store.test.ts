@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
-import type { Flow } from "../../src/core/flow/schema.js";
+import { parseFlow, type Flow } from "../../src/core/flow/schema.js";
 import {
   agent,
+  branch,
   flow,
   flowSettings,
+  output,
   sessionContainer,
   thenWire,
+  trigger,
+  wire,
 } from "../fixtures/flow-builders.js";
 import { FakeFlowStore } from "./fake-flow-store.js";
 
@@ -24,6 +28,30 @@ const flowOf = (...ids: string[]): Flow =>
 const ids = (...values: string[]) => {
   const queue = [...values];
   return () => queue.shift() ?? "unexpected-id";
+};
+
+const sendsUse = (id: string, libraryId: string) => ({
+  id,
+  label: id,
+  position: { x: 0, y: 0 },
+  type: "library",
+  settings: { libraryId, label: id, overrides: {} },
+});
+
+const sendsLibrary = (members: { id: string; type: string }[]): Flow => {
+  const path = ["canvas-start", ...members.map(({ id }) => id), "canvas-stop"];
+  const portOf = (id: string) =>
+    members.find((member) => member.id === id)?.type === "branch" ? ["yes", "no"] : ["out"];
+  return parseFlow({
+    nodes: [trigger("canvas-start"), ...members, output("canvas-stop")],
+    wires: path
+      .slice(1)
+      .flatMap((to, index) =>
+        portOf(path[index] as string).map((port) => wire(path[index] as string, port, to, "in")),
+      ),
+    containers: [],
+    settings: flowSettings,
+  });
 };
 
 describe("FakeFlowStore", () => {
@@ -200,5 +228,26 @@ describe("FakeFlowStore", () => {
       { name: "Library", kind: "incomplete", buildConfig: { repo: "/r/lib", base: "main" } },
       { name: "Workflow", kind: "workflow", buildConfig: { repo: "/r/shop", base: "dev" } },
     ]);
+  });
+
+  it("lists what each blueprint sends up: a Branch variable nobody defines, through a nested library too", () => {
+    const store = new FakeFlowStore({ newId: ids("flow-a", "flow-b", "flow-c") });
+    store.save(sendsLibrary([branch("decide", "approved")]), { name: "Asks" });
+    store.save(
+      sendsLibrary([
+        agent("review", {
+          settings: { produces: [{ variable: "approved", yesIf: "ok", noIf: "not ok" }] },
+        }),
+        branch("decide", "approved"),
+      ]),
+      { name: "Defines" },
+    );
+    store.save(sendsLibrary([sendsUse("use-asks", "flow-a")]), { name: "Wraps" });
+
+    expect(Object.fromEntries(store.list().map(({ name, sends }) => [name, sends]))).toEqual({
+      Asks: ["approved"],
+      Defines: [],
+      Wraps: ["approved"],
+    });
   });
 });

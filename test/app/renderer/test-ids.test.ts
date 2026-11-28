@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  agentProducesAddTestId,
   agentProducesTestId,
-  branchDecidedByTestId,
-  branchValueTestId,
+  branchVariableExistingTestId,
+  blueprintVariableTestIds,
   branchVariableTestId,
   buildDialogTestIds,
   containerTestIds,
@@ -10,6 +11,7 @@ import {
   dialogTestIds,
   pageTestIds,
   paletteTestId,
+  produceRowTestIds,
   readoutTestIds,
 } from "../../../src/app/renderer/test-ids.js";
 import { NodeType } from "../../../src/core/flow/schema.js";
@@ -96,6 +98,7 @@ describe("test ids", () => {
       refusal: "build-dialog-refusal",
     });
     expect(buildDialogTestIds.variable("ticket")).toBe("build-dialog-variable-ticket");
+    expect(dialogTestIds.variable("approved")).toBe("run-dialog-variable-approved");
     expect(buildDialogTestIds.existingBranch("feat-y")).toBe("build-dialog-existing-branch-feat-y");
   });
 
@@ -308,10 +311,15 @@ describe("test ids", () => {
 
   it("names the Branch variable picker and the Doctor's worktree list", () => {
     expect(branchVariableTestId).toBe("node-setting-variable");
-    expect(branchDecidedByTestId).toBe("node-setting-decided-by");
-    expect(branchValueTestId).toBe("node-setting-value");
+    expect(branchVariableExistingTestId).toBe("node-setting-variable-existing");
     expect(agentProducesTestId).toBe("node-setting-produces");
+    expect(agentProducesAddTestId).toBe("node-setting-produces-add");
     expect(pageTestIds.doctorWorktrees).toBe("doctor-worktrees");
+  });
+
+  it("names the blueprint's variables list and each variable on it", () => {
+    expect(blueprintVariableTestIds.list).toBe("blueprint-variables");
+    expect(blueprintVariableTestIds.variable("approved")).toBe("blueprint-variable-approved");
   });
 
   it("gives every control its own id, and a parameterised id its own id per value", () => {
@@ -321,7 +329,14 @@ describe("test ids", () => {
       pageTestIds,
       dialogTestIds,
       buildDialogTestIds,
-      { branchVariableTestId, branchDecidedByTestId, branchValueTestId, agentProducesTestId },
+      {
+        branchVariableTestId,
+        branchVariableExistingTestId,
+        agentProducesTestId,
+        agentProducesAddTestId,
+      },
+      [0, 1].flatMap((index) => Object.values(produceRowTestIds).map((id) => id(index))),
+      blueprintVariableTestIds,
       {
         containerFrame: containerTestIds.frame,
         nameField: (id: string) => containerTestIds.field(id, "name"),

@@ -1,0 +1,199 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "label": "Start",
+      "type": "trigger",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "settings": {}
+    },
+    {
+      "id": "first",
+      "label": "Approved?",
+      "type": "branch",
+      "position": {
+        "x": 240,
+        "y": 0
+      },
+      "settings": {
+        "variable": "approved"
+      }
+    },
+    {
+      "id": "use",
+      "label": "Library",
+      "type": "library",
+      "position": {
+        "x": 480,
+        "y": 0
+      },
+      "settings": {
+        "libraryId": "sending-library",
+        "label": "Sending",
+        "overrides": {}
+      }
+    },
+    {
+      "id": "done",
+      "label": "Done",
+      "type": "output",
+      "position": {
+        "x": 720,
+        "y": 0
+      },
+      "settings": {
+        "name": "result",
+        "type": "text"
+      }
+    },
+    {
+      "id": "workspace-1-start",
+      "label": "Start",
+      "type": "trigger",
+      "position": {
+        "x": 0,
+        "y": -240
+      },
+      "settings": {}
+    },
+    {
+      "id": "workspace-1-stop",
+      "label": "Stop",
+      "type": "output",
+      "position": {
+        "x": 240,
+        "y": -240
+      },
+      "settings": {
+        "name": "result",
+        "type": "text"
+      }
+    },
+    {
+      "id": "canvas-start",
+      "label": "Start",
+      "type": "trigger",
+      "position": {
+        "x": -240,
+        "y": -240
+      },
+      "settings": {}
+    },
+    {
+      "id": "canvas-stop",
+      "label": "Stop",
+      "type": "output",
+      "position": {
+        "x": 480,
+        "y": -240
+      },
+      "settings": {
+        "name": "result",
+        "type": "text"
+      }
+    }
+  ],
+  "wires": [
+    {
+      "kind": "then",
+      "from": {
+        "node": "start",
+        "port": "out"
+      },
+      "to": {
+        "node": "first",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "first",
+        "port": "yes"
+      },
+      "to": {
+        "node": "use",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "first",
+        "port": "no"
+      },
+      "to": {
+        "node": "use",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "use",
+        "port": "out"
+      },
+      "to": {
+        "node": "done",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "workspace-1-start",
+        "port": "out"
+      },
+      "to": {
+        "node": "workspace-1-stop",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "canvas-start",
+        "port": "out"
+      },
+      "to": {
+        "node": "workspace-1",
+        "port": "flow-in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "workspace-1",
+        "port": "flow-out"
+      },
+      "to": {
+        "node": "canvas-stop",
+        "port": "in"
+      }
+    }
+  ],
+  "containers": [
+    {
+      "id": "workspace-1",
+      "kind": "workspace",
+      "model": "sonnet",
+      "nodes": ["workspace-1-start", "workspace-1-stop"]
+    },
+    {
+      "id": "session-1",
+      "kind": "session",
+      "name": "main",
+      "repo": "/work/repo",
+      "branch": "main",
+      "model": "sonnet",
+      "nodes": ["start", "first", "use", "done"]
+    }
+  ],
+  "settings": {
+    "buildModel": "sonnet",
+    "permissionMode": "default"
+  }
+}

@@ -27,7 +27,13 @@ const lookupOf =
     const library = libraries[flowId];
     return library === undefined
       ? undefined
-      : { name: library.name, kind: library.kind, sessions: [], uses: library.uses ?? [] };
+      : {
+          name: library.name,
+          kind: library.kind,
+          sessions: [],
+          uses: library.uses ?? [],
+          sends: [],
+        };
   };
 
 const lookup = lookupOf({

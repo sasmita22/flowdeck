@@ -200,9 +200,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("agent nodes with real claude
       expect(
         await readFile(join(built.dir, "plugin", "agents", `${piece}.md`), "utf8"),
       ).not.toContain(secret);
-      expect(agentTurnText(buildName, piece, { id: "a1", given: [], writes: [] })).not.toContain(
-        secret,
-      );
+      expect(agentTurnText(buildName, piece, { id: "a1" })).not.toContain(secret);
 
       const runId = await engine.runBuild(built.buildId);
       const status = await engine.waitForRunEnd(runId, runTimeoutMs - 60_000);

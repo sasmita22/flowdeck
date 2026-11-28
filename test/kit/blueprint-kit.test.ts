@@ -526,6 +526,24 @@ describe("the blueprint kit", () => {
       expect(settingKeys(type).filter((key) => !row?.settings.includes(`\`${key}\``))).toEqual([]);
     });
 
+    it.each([
+      ["agent", ["given", "writes"]],
+      ["branch", ["decidedBy", "value"]],
+    ])("names no removed setting in the %s row", (type, removed) => {
+      const row = rows.find((candidate) => candidate.type === type);
+
+      expect(removed.filter((key) => row?.settings.includes(`\`${key}\``))).toEqual([]);
+    });
+
+    it.each(kitFiles())(
+      "%s names no given or writes setting and no Branch decided by a value or Decided by",
+      (file) => {
+        expect(readKit(file)).not.toMatch(
+          /`given`|`writes`|`decidedBy`|decided by a (?:value|variable)|hand-off template/i,
+        );
+      },
+    );
+
     it("reads a setting left out of a node row as a mismatch", () => {
       const row = rows.find((candidate) => candidate.type === "agent");
       const without = row?.settings.replace("`role`", "role") ?? "";

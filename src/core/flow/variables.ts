@@ -1,7 +1,9 @@
 import { z } from "zod";
-import { decidedByValue } from "../nodes/branch/settings.js";
+import { labelOf } from "./labels.js";
+import type { LibraryLookup } from "./libraries.js";
 import { mainFlowOnly } from "./main-flow.js";
-import type { Flow } from "./schema.js";
+import { coveredOnEveryPath, reachableFrom } from "./paths.js";
+import type { Flow, Node } from "./schema.js";
 
 export type VariableValues = Readonly<Record<string, string | boolean>>;
 
@@ -51,22 +53,101 @@ export const groupVariables = (
     return owner ? { ...variable, group: { path: owner.path, name: owner.name } } : variable;
   });
 
-export function foundVariables(flow: Flow): FoundVariable[] {
-  const found = new Map<string, FoundVariable>();
-  const add = (name: string, kind: FoundVariable["kind"], nodeId: string) => {
-    const key = JSON.stringify([name, kind]);
-    const entry = found.get(key);
-    if (entry === undefined) found.set(key, { name, kind, nodeIds: [nodeId] });
-    else if (!entry.nodeIds.includes(nodeId)) entry.nodeIds.push(nodeId);
-  };
-  for (const node of mainFlowOnly(flow).nodes) {
-    if (node.type === "branch" && !decidedByValue(node.settings) && node.settings.variable !== "") {
-      add(node.settings.variable, "yes-no", node.id);
-    }
-    if (node.type === "agent") {
-      for (const name of referencedVariables(node.settings.instructions))
-        add(name, "text", node.id);
-    }
+type NodeIds = FoundVariable["nodeIds"];
+
+const collect = (entries: readonly (readonly [string, string])[]): Map<string, NodeIds> => {
+  const found = new Map<string, NodeIds>();
+  for (const [name, nodeId] of entries) {
+    const ids = found.get(name);
+    if (ids === undefined) found.set(name, [nodeId]);
+    else if (!ids.includes(nodeId)) ids.push(nodeId);
   }
-  return [...found.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return found;
+};
+
+const claimedBy = (node: Node, lookup: LibraryLookup): readonly string[] => {
+  if (node.type === "branch") return node.settings.variable === "" ? [] : [node.settings.variable];
+  if (node.type === "library") return lookup(node.settings.libraryId)?.sends ?? [];
+  return [];
+};
+
+const variableClaims = (flow: Flow, lookup: LibraryLookup): Map<string, NodeIds> =>
+  collect(
+    flow.nodes.flatMap((node) => claimedBy(node, lookup).map((name) => [name, node.id] as const)),
+  );
+
+const textUses = (flow: Flow): Map<string, NodeIds> =>
+  collect(
+    flow.nodes.flatMap((node) =>
+      node.type === "agent"
+        ? referencedVariables(node.settings.instructions).map((name) => [name, node.id] as const)
+        : [],
+    ),
+  );
+
+const byName = (variables: FoundVariable[]): FoundVariable[] =>
+  variables.sort((a, b) => a.name.localeCompare(b.name));
+
+const asFound = (uses: Map<string, NodeIds>, kind: FoundVariable["kind"]): FoundVariable[] =>
+  [...uses].map(([name, nodeIds]) => ({ name, kind, nodeIds }));
+
+export function foundVariables(flow: Flow): FoundVariable[] {
+  const main = mainFlowOnly(flow);
+  return byName([
+    ...asFound(
+      variableClaims(main, () => undefined),
+      "yes-no",
+    ),
+    ...asFound(textUses(main), "text"),
+  ]);
+}
+
+export const producedNames = (node: Node): string[] =>
+  node.type === "agent"
+    ? (node.settings.produces ?? []).map(({ variable }) => variable).filter((name) => name !== "")
+    : [];
+
+const producersBefore = (
+  flow: Flow,
+  name: string,
+  claimants: readonly string[],
+): string[] | undefined => {
+  const producers = flow.nodes
+    .filter((node) => producedNames(node).includes(name))
+    .map((node) => node.id);
+  if (producers.length === 0) return undefined;
+  if (!claimants.every((claimant) => coveredOnEveryPath(flow, claimant, producers))) {
+    return undefined;
+  }
+  const before = producers.filter((producer) => {
+    const later = reachableFrom(flow, producer);
+    return claimants.some((claimant) => later.has(claimant));
+  });
+  return before.length === 0 ? undefined : before;
+};
+
+export type OwnedVariable = { name: string; definedBy?: string[] };
+
+export type BlueprintVariables = {
+  owned: OwnedVariable[];
+  sends: string[];
+  toAsk: FoundVariable[];
+};
+
+export function blueprintVariables(flow: Flow, lookup: LibraryLookup): BlueprintVariables {
+  const main = mainFlowOnly(flow, lookup);
+  const claims = variableClaims(main, lookup);
+  const owned = [...claims].map(([name, claimants]): OwnedVariable => {
+    const producers = producersBefore(main, name, claimants);
+    return producers === undefined
+      ? { name }
+      : { name, definedBy: producers.map((id) => labelOf(main, id)) };
+  });
+  const sends = owned.filter(({ definedBy }) => definedBy === undefined).map(({ name }) => name);
+  const undefinedClaims = new Map([...claims].filter(([name]) => sends.includes(name)));
+  return {
+    owned,
+    sends,
+    toAsk: byName([...asFound(undefinedClaims, "yes-no"), ...asFound(textUses(main), "text")]),
+  };
 }

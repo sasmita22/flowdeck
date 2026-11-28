@@ -118,6 +118,16 @@ const directivesOf = (text, agentType) => {
   return inPrompt.length > 0 ? inPrompt : directivesIn(agentFileText(agentType));
 };
 const fence = "\\x60\\x60\\x60";
+const setPattern = /fake: set ([A-Za-z0-9_.-]+) (yes|no)\\b/g;
+const setsIn = (text) => [...text.matchAll(setPattern)].map(([, name, word]) => [name, word === "yes"]);
+const setsOf = (text, agentType) => {
+  const inPrompt = setsIn(text);
+  return inPrompt.length > 0 ? inPrompt : setsIn(agentFileText(agentType));
+};
+const replyWith = (sets) =>
+  sets.length === 0
+    ? "ok"
+    : "Done.\\n" + fence + "json\\n{" + sets.map(([name, value]) => JSON.stringify(name) + ": " + value).join(", ") + "}\\n" + fence;
 const sessionEntry = (slug) => {
   const lines = readFileSync(resolve(process.cwd(), "CLAUDE.md"), "utf8").split("\\n");
   const heading = lines.findIndex((line) => line.startsWith("### Session container ") && line.endsWith(" (" + slug + ")"));
@@ -182,6 +192,7 @@ const runTurn = async (text) => {
   if (match === null) return setTimeout(stop, 50);
   const [, agentType, nodeId] = match;
   const directives = directivesOf(text, agentType);
+  const sets = setsOf(text, agentType);
   appendFileSync(resolve(__dirname, "dispatched"), nodeId + "\\n");
   const outcome = outcomeOf(nodeId);
   if (outcome === "hold") return;
@@ -227,7 +238,7 @@ const runTurn = async (text) => {
     await pause(30);
   }
   await pause(100);
-  stop();
+  send({ hook_event_name: "Stop", last_assistant_message: replyWith(sets) });
 };
 
 const unfilledLine = /^@unfilled.*\\n\\n?/m;

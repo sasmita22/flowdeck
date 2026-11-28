@@ -145,8 +145,8 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
   "files": {
     "sessions/main/CLAUDE.md": "50dfad688b8c520cc8da1536705e4a38dda3eb0191c29761d130778dfb0be06a",
     "sessions/main/plugin/.claude-plugin/plugin.json": "889a5055dba69a8ba5e084f8f72077de21b44af9adee44d90d0e68ecb918dc9c",
-    "sessions/main/plugin/agents/a.md": "4fb165349608524a0a063300f21296dd834dc034040a6d645ae4d59c06fa23df",
-    "sessions/main/plugin/agents/p.md": "e61281fb41103f42d043ddeaa3e971584f033408f9bfc09f4642fed7710041d9",
+    "sessions/main/plugin/agents/a.md": "1a40fbe9b380ce952ec27797c003fab7375ddc3bd24294bae2570bee3b91215e",
+    "sessions/main/plugin/agents/p.md": "7c6ec9b5adae599c22719e8c70e522a11de7e2375a6a68b33a7cf5db54c4a108",
     "sessions/main/plugin/hooks/hooks.json": "0b6668db51a29aed2069452af8a4c3ad439201d1eceaa71745f77769f33e3d76",
     "sessions/main/plugin/hooks/no-force-push.sh": "eb7a0c70479abf06c8ff5ea6966ed3fb3e465a9799d4fcd6dc13b2a34ee44625",
     "sessions/main/plugin/hooks/rules-after-compact.sh": "be6ec85c23c48ecbc8219e52c0fc49b9fbece67d29767c92c2c961e80f6444e1",
@@ -160,7 +160,7 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
     "workspace/plugin/skills/run/SKILL.md": "ead61d31e6873ed86119573b5565ae1dfdb0e84a3cafce86136c7959a53df26b",
     "workspace/settings.json": "1ecefb7457ec56704f34c6e34f0bca16b14e7d2e94b4b47326595d50743d77fd"
   },
-  "hash": "b8d23391da3dd37fd8976014f3df52b38827eb0651643f2e1613acbdf42ae509",
+  "hash": "edcb9194e31c4ccaeba88bc3315f4b64ab2f378e0d00877595b9b4b65b979de0",
   "layout": "workspace",
   "outputs": [
     {
@@ -228,15 +228,11 @@ implementer
 
 Hand-off files are read and written by bare name (\`<file>\`, not \`repo/<file>\`) in the run's working folder. A run starts there; in this session's own folder that folder is \`repo/\`.
 
-None.
-
 ## Steps
 
 Implement the plan.
 
 ## Output
-
-None.
 
 ## When to stop
 
@@ -257,15 +253,11 @@ implementer
 
 Hand-off files are read and written by bare name (\`<file>\`, not \`repo/<file>\`) in the run's working folder. A run starts there; in this session's own folder that folder is \`repo/\`.
 
-None.
-
 ## Steps
 
 Do the work.
 
 ## Output
-
-None.
 
 ## When to stop
 

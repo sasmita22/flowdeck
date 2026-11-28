@@ -38,8 +38,10 @@ vi.mock("../../../../src/app/renderer/canvas/layout.js", async (importOriginal) 
 });
 import { defaultPermissionMode, modelChoices } from "../../../../src/core/flow/choices.js";
 import { NodeType, parseFlow, type Flow, type Node } from "../../../../src/core/flow/schema.js";
+import { rule as variableUnique } from "../../../../src/core/compiler/rules/variable-unique.js";
 import {
   agent,
+  branch,
   canvasPath,
   flow,
   flowSettings,
@@ -52,6 +54,7 @@ import {
   sessionContainer,
   thenWire,
   trigger,
+  wire,
   workspaceContainer,
 } from "../../../fixtures/flow-builders.js";
 
@@ -157,7 +160,7 @@ describe("drop", () => {
         type: "agent",
         label: "Agent",
         position: { x: 120, y: 80 },
-        settings: { role: "", instructions: "", model: "sonnet" },
+        settings: { role: "", instructions: "", model: "sonnet", produces: [] },
       },
     ]);
     expect(state.flow.wires).toEqual([]);
@@ -2652,6 +2655,7 @@ describe("libraries", () => {
     kind,
     sessions,
     uses,
+    sends: [],
   });
 
   const androidSession = {
@@ -2688,6 +2692,7 @@ describe("libraries", () => {
       kind: "session-library",
       sessions: [androidSession],
       uses: [],
+      sends: [],
     });
     expect(store.getState().libraries("f-gone")).toBeUndefined();
     expect(store.getState().librarySummaries).toEqual(summaries);
@@ -2956,4 +2961,45 @@ describe("libraries", () => {
       expect.stringMatching(/no longer exists/),
     );
   });
+});
+
+describe("copying a Branch that shares its variable", () => {
+  const sharing = () =>
+    onMainFlow(
+      [
+        branch("first", "approved"),
+        { ...branch("second", "approved"), settings: { variable: "approved", shared: true } },
+      ],
+      [wire("first", "yes", "second", "in"), wire("first", "no", "second", "in")],
+    );
+  const copyBy: Record<string, (store: Store) => void> = {
+    duplicate: (store) => store.getState().duplicate(),
+    paste: (store) => {
+      store.getState().copy();
+      store.getState().paste();
+    },
+  };
+
+  it.each(Object.keys(copyBy))(
+    "gives a Branch copied by %s no shared mark, last in the blueprint, so the copy is the later claim",
+    (how) => {
+      const store = loadedCanvas(sharing());
+      store.getState().select(["second"]);
+
+      copyBy[how]?.(store);
+
+      const { nodes } = store.getState().flow;
+      const copy = nodes.at(-1);
+      expect(copy?.type).toBe("branch");
+      expect(["first", "second"]).not.toContain(copy?.id);
+      expect(copy?.settings).toEqual({ variable: "approved" });
+      expect(nodes.find(({ id }) => id === "second")?.settings).toEqual({
+        variable: "approved",
+        shared: true,
+      });
+      expect(variableUnique.check(store.getState().flow).map(({ node }) => node)).toEqual([
+        copy?.id,
+      ]);
+    },
+  );
 });

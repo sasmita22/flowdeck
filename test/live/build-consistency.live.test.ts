@@ -57,7 +57,7 @@ async function buildOnce(flow: Flow, index: number): Promise<Outcome> {
       buildModel: "haiku",
     });
     const report = buildReportSchema.parse(built.outcome.report);
-    const { failures } = checkRecorded(workspace, report, flow);
+    const { failures } = checkRecorded(workspace, report);
     const outcome: Outcome = {
       outcome: built.outcome.outcome,
       report,

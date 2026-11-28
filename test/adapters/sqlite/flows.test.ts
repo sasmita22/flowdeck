@@ -7,7 +7,7 @@ import { SqliteFlowStore } from "../../../src/adapters/sqlite/flows.js";
 import { openDatabase } from "../../../src/adapters/sqlite/open-database.js";
 import { SqliteStore } from "../../../src/adapters/sqlite/sqlite-store.js";
 import { flowsEqual } from "../../../src/core/flow/equal.js";
-import type { CanvasNote, Flow } from "../../../src/core/flow/schema.js";
+import { parseFlow, type CanvasNote, type Flow } from "../../../src/core/flow/schema.js";
 import { registry } from "../../../src/core/nodes/registry.js";
 import {
   agent,
@@ -19,6 +19,7 @@ import {
   sessionContainer,
   thenWire,
   trigger,
+  wire,
   workspaceContainer,
 } from "../../fixtures/flow-builders.js";
 import { roundTripFlow, unconnectedRoundTripFlow } from "../../fixtures/round-trip-flow.js";
@@ -38,6 +39,30 @@ const withNotes = (): Flow => ({ ...roundTripFlow(), notes });
 const relabelled = (label: string): Flow => {
   const flow = roundTripFlow();
   return { ...flow, nodes: flow.nodes.map((node, i) => (i === 0 ? { ...node, label } : node)) };
+};
+
+const sendsUse = (id: string, libraryId: string) => ({
+  id,
+  label: id,
+  position: { x: 0, y: 0 },
+  type: "library",
+  settings: { libraryId, label: id, overrides: {} },
+});
+
+const sendsLibrary = (members: { id: string; type: string }[]): Flow => {
+  const path = ["canvas-start", ...members.map(({ id }) => id), "canvas-stop"];
+  const portOf = (id: string) =>
+    members.find((member) => member.id === id)?.type === "branch" ? ["yes", "no"] : ["out"];
+  return parseFlow({
+    nodes: [trigger("canvas-start"), ...members, output("canvas-stop")],
+    wires: path
+      .slice(1)
+      .flatMap((to, index) =>
+        portOf(path[index] as string).map((port) => wire(path[index] as string, port, to, "in")),
+      ),
+    containers: [],
+    settings: flowSettings,
+  });
 };
 
 describe("SqliteFlowStore", () => {
@@ -233,6 +258,20 @@ describe("SqliteFlowStore", () => {
 
       expect(row.session).toBe("{}");
       expect(JSON.parse(row.containers)).toEqual(saved.containers);
+    });
+
+    it("keeps two Branches claiming one variable in the order they were added", () => {
+      const original = onMainFlow(
+        [branch("zeta", "approved"), branch("alpha", "approved")],
+        [wire("zeta", "yes", "alpha", "in"), wire("zeta", "no", "alpha", "in")],
+      );
+      open().save(original);
+
+      const reloaded = open().loadLatest()?.flow;
+
+      expect(
+        reloaded?.nodes.filter((node) => node.type === "branch").map((node) => node.id),
+      ).toEqual(["zeta", "alpha"]);
     });
 
     it("keeps node order and wire order", () => {
@@ -513,6 +552,7 @@ describe("SqliteFlowStore", () => {
           variables: [],
           sessions: [],
           uses: [],
+          sends: [],
           pinned: false,
         },
         {
@@ -526,6 +566,7 @@ describe("SqliteFlowStore", () => {
           variables: [],
           sessions: [],
           uses: [],
+          sends: [],
           pinned: false,
         },
       ]);
@@ -549,6 +590,27 @@ describe("SqliteFlowStore", () => {
       });
       expect(open().loadLatest("flow-b")?.flow).toEqual(relabelled("b1"));
       expect(store.loadLatest()?.flowId).toBe("flow-a");
+    });
+
+    it("lists what each blueprint sends up: a Branch variable nobody defines, through a nested library too", () => {
+      const store = open(ids("flow-a", "flow-b", "flow-c"));
+      store.save(sendsLibrary([branch("decide", "approved")]), { name: "Asks" });
+      store.save(
+        sendsLibrary([
+          agent("review", {
+            settings: { produces: [{ variable: "approved", yesIf: "ok", noIf: "not ok" }] },
+          }),
+          branch("decide", "approved"),
+        ]),
+        { name: "Defines" },
+      );
+      store.save(sendsLibrary([sendsUse("use-asks", "flow-a")]), { name: "Wraps" });
+
+      expect(Object.fromEntries(store.list().map(({ name, sends }) => [name, sends]))).toEqual({
+        Asks: ["approved"],
+        Defines: [],
+        Wraps: ["approved"],
+      });
     });
 
     it("lists the version count, last save, Build configuration and found variables of each, last saved first", () => {
@@ -598,6 +660,7 @@ describe("SqliteFlowStore", () => {
           ],
           sessions: [],
           uses: [],
+          sends: ["ship"],
           pinned: false,
         },
         {
@@ -611,6 +674,7 @@ describe("SqliteFlowStore", () => {
           variables: [],
           sessions: [],
           uses: [],
+          sends: [],
           pinned: false,
         },
       ]);
@@ -865,6 +929,7 @@ describe("SqliteFlowStore", () => {
       { name: "026_build_snapshot_flow.sql" },
       { name: "027_drop_unknown_node_types.sql" },
       { name: "028_drop_removed_gate_nodes.sql" },
+      { name: "029_drop_old_branch_and_agent_settings.sql" },
     ]);
   });
 });

@@ -407,36 +407,6 @@ test("A node is renamed in place by double-click or Enter, and Escape keeps the 
     .toEqual(["Plan", "Test"]);
 });
 
-test("An Agent's files are set in the inspector, the wire stays a Then wire, and Undo takes them back", async () => {
-  seedFlow(
-    home,
-    inOneSession(
-      [at(agent("plan"), 80, 160, "Planner"), at(agent("build"), 420, 160, "Builder")],
-      [thenWire("plan", "build")],
-    ),
-  );
-  const window = await launch();
-  const settingsOf = async (id: string) =>
-    (await readout(window)).nodes.find((node) => node.id === id)?.settings;
-
-  await window.getByTestId("node-plan").click();
-  await window.getByTestId("node-setting-writes").fill("plan.md");
-  await window.getByTestId("node-setting-writes").blur();
-  await window.getByTestId("node-build").click();
-  await window.getByTestId("node-setting-given").fill("plan.md");
-  await window.getByTestId("node-setting-given").blur();
-
-  await expect.poll(() => settingsOf("plan")).toMatchObject({ writes: ["plan.md"] });
-  await expect.poll(() => settingsOf("build")).toMatchObject({ given: ["plan.md"] });
-  expect((await readout(window)).wires).toEqual([thenWire("plan", "build")]);
-
-  await window.keyboard.press("Meta+z");
-  await expect.poll(() => settingsOf("build")).not.toMatchObject({ given: ["plan.md"] });
-  await expect(window.getByTestId("node-setting-given")).toHaveValue("");
-  expect(await settingsOf("plan")).toMatchObject({ writes: ["plan.md"] });
-  expect((await readout(window)).wires).toEqual([thenWire("plan", "build")]);
-});
-
 const zoomOf = async (window: Page) =>
   window
     .locator(".react-flow__viewport")

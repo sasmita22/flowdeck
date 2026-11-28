@@ -1,22 +1,14 @@
 import type { Manifest, ManifestContainer, ManifestNode } from "../compiler/lower.js";
-import type { VerifyFileSystem } from "../compiler/verify.js";
 import { pieceOf } from "../compiler/pieces.js";
-import { hasTemplate, templatePath } from "../compiler/handoff-templates.js";
-import { handoffPairs } from "../flow/handoff.js";
-import { agentOutcome, agentTurnNode, agentTurnText } from "../nodes/agent/execute.js";
 import {
-  branchDecision,
-  branchSkips,
-  isBranchPort,
-  portOf,
-  producedAnswer,
-  producersOf,
-  valueAnswer,
-  valueRequest,
-  type BranchPort,
-} from "../nodes/branch/execute.js";
-import { decidedByValue, type BranchSettings } from "../nodes/branch/settings.js";
-import { producedName } from "../nodes/agent/settings.js";
+  agentOutcome,
+  agentTurnNode,
+  agentTurnText,
+  producedRows,
+} from "../nodes/agent/execute.js";
+import { branchDecision, branchSkips, type BranchPort } from "../nodes/branch/execute.js";
+import type { BranchSettings } from "../nodes/branch/settings.js";
+import type { VariableValues } from "../flow/variables.js";
 import {
   forkTurnText,
   parallelSections,
@@ -25,7 +17,6 @@ import {
   type ParallelSection,
 } from "../nodes/fork/execute.js";
 import { bodyProblems } from "../flow/structure.js";
-import { listPath } from "./list-path.js";
 import {
   joinComplete,
   notStartedRequest,
@@ -67,7 +58,7 @@ import type { NodeState } from "./state.js";
 import { SectionWatch } from "./section-watch.js";
 import type { EventEntry, Store, StoredEvent } from "./store.js";
 import { stampedBefore, waitForTurnEnd, type TurnEndEvent, type TurnEvents } from "./turns.js";
-import { parseProducedValue, parseVerdict } from "./verdict.js";
+import { parseProducedValues, parseVerdict } from "./verdict.js";
 import type { HumanDecision, HumanOutcome, HumanWaiter, WaitReply, WaitRequest } from "./wait.js";
 
 export type RunnableManifest = Pick<ManifestContainer, "prefix" | "nodes"> &
@@ -79,12 +70,8 @@ export type RunnerDeps = {
   session: { ensureStarted(): Promise<void> };
   events: TurnEvents;
   waiter: HumanWaiter;
-  files: Pick<VerifyFileSystem, "readFile"> & {
-    writeFile(path: string, content: string): Promise<void>;
-  };
   auto?: boolean;
   onChange?: (line: string) => void;
-  cwd: string;
   sessionId: string;
   turnTimeoutMs?: number;
   store: Store;
@@ -96,7 +83,7 @@ export type RunnerDeps = {
   settleQuietMs?: number;
 };
 
-export type RunOptions = { actions?: ResumeActions };
+export type RunOptions = { actions?: ResumeActions; values?: VariableValues };
 
 type RunResult = {
   outcome: "done" | "failed";
@@ -155,9 +142,6 @@ export class StructureError extends Error {
 }
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
-
-const readOrMissing = (files: RunnerDeps["files"], path: string): Promise<string | undefined> =>
-  files.readFile(path).catch(() => undefined);
 
 const lastMessage = (event: TurnEndEvent) => {
   const message = event.payload["last_assistant_message"];
@@ -219,12 +203,17 @@ function recordAgentCallsUntilStop(
   };
 }
 
-const producedPayload = (settings: object, message: string | undefined) => {
-  const name = producedName(settings);
-  if (name === undefined) return {};
-  const read = parseProducedValue(message, name);
-  return read.kind === "value" ? { produced: { name, answer: read.answer } } : {};
-};
+const producedBy = (settings: object, message: string | undefined) =>
+  parseProducedValues(
+    message,
+    producedRows(settings).map((row) => row.variable),
+  );
+
+const variablesPayload = (values: Record<string, boolean>) =>
+  Object.keys(values).length === 0 ? {} : { variables: values };
+
+const missingReason = (missing: readonly string[]) =>
+  `ended without setting ${missing.map((name) => JSON.stringify(name)).join(", ")}`;
 
 const finishedIds = (calls: readonly AgentCall[], nodeId: string): string[] =>
   calls.flatMap((call) =>
@@ -242,6 +231,7 @@ export class Runner {
   private inTurn: string | undefined;
   private openAsks = 0;
   private compactedAt: string | undefined;
+  private values: VariableValues | undefined;
 
   constructor(deps: RunnerDeps) {
     this.deps = deps;
@@ -292,6 +282,7 @@ export class Runner {
   private async runNodes(manifest: RunnableManifest, options: RunOptions): Promise<RunResult> {
     const nodes = manifest.nodes.filter((node) => runnable.has(node.type));
     this.actions = new Map(Object.entries(options.actions ?? {}));
+    this.values = options.values ?? manifest.values;
     this.replayAnswers(nodes);
     this.startTriggers(manifest.nodes);
     let started = false;
@@ -426,9 +417,6 @@ export class Runner {
   ): Promise<StepResult> {
     const settled = this.settled(node, condition);
     if (settled !== undefined) return settled;
-    const held = await this.holdForFiles(node.id, context);
-    if (held !== undefined) return held;
-    await this.copyTemplates(node.id, context);
     const { ensureStarted } = context;
     let failure: string | undefined;
     let reply: string | undefined;
@@ -440,7 +428,7 @@ export class Runner {
       const result = await this.runSection(node, context);
       if (result.failure !== undefined) return result;
     } else if (node.type === "branch") {
-      const result = await this.runBranch(node, context);
+      const result = this.runBranch(node, context);
       if (result.failure !== undefined) return result;
     } else if (node.type === "join") {
       throw new Error(`${node.id} (join) was reached outside its parallel section`);
@@ -470,19 +458,30 @@ export class Runner {
     return { reply };
   }
 
-  private async runBranch(branch: ManifestNode, context: RunContext): Promise<StepResult> {
+  private runBranch(branch: ManifestNode, context: RunContext): StepResult {
     const { manifest, nodes } = context;
-    const own = await this.ownDecision(branch, context);
-    if ("failure" in own) return own;
+    const own = this.decide(branch, this.allEvents());
+    if (own === undefined) {
+      const name = (branch.settings as BranchSettings).variable;
+      const reason = `no yes/no value for ${JSON.stringify(name)}: no Agent before it set it and the run has no value for it`;
+      this.recordAll([
+        { nodeId: branch.id, event: { kind: "running" } },
+        {
+          nodeId: branch.id,
+          event: { kind: "failed", payload: { message: `${branch.id} failed: ${reason}` } },
+        },
+      ]);
+      return { failure: { nodeId: branch.id, reason } };
+    }
     const decisions = new Map(
       nodes
         .filter(
           (node) =>
             node.type === "branch" && node.id !== branch.id && this.status(node.id) === "done",
         )
-        .map((node) => [node.id, this.pastDecision(node, manifest)]),
+        .map((node) => [node.id, this.pastDecision(node)]),
     );
-    decisions.set(branch.id, own.port);
+    decisions.set(branch.id, own);
     const eligible = new Set(
       nodes.filter((node) => this.status(node.id) === "waiting").map((node) => node.id),
     );
@@ -494,76 +493,27 @@ export class Runner {
       eligible,
     });
     this.recordAll([
-      ...(own.asked
-        ? []
-        : [
-            { nodeId: branch.id, event: { kind: "running" } as const },
-            { nodeId: branch.id, event: { kind: "done" } as const },
-          ]),
+      { nodeId: branch.id, event: { kind: "running" } },
+      { nodeId: branch.id, event: { kind: "done" } },
       ...skips.map((nodeId) => ({ nodeId, event: { kind: "skipped" } as const })),
     ]);
     for (const id of skips) this.emit(`${id} skipped`);
     return {};
   }
 
-  private variableDecision(branch: ManifestNode, manifest: RunnableManifest): BranchPort {
-    return branchDecision(manifest, branch.settings as BranchSettings);
+  private decide(branch: ManifestNode, events: readonly StoredEvent[]): BranchPort | undefined {
+    return branchDecision(events, this.values, branch.settings as BranchSettings);
   }
 
-  private pastDecision(branch: ManifestNode, manifest: RunnableManifest): BranchPort {
-    const settings = branch.settings as BranchSettings;
-    if (!decidedByValue(settings)) return this.variableDecision(branch, manifest);
+  private pastDecision(branch: ManifestNode): BranchPort {
     const events = this.allEvents();
     const decidedAt = events.findLastIndex(
       (event) => event.nodeId === branch.id && event.kind === "done",
     );
-    const before = events.slice(0, decidedAt);
-    const answered = before.findLast(
-      (event) => event.nodeId === branch.id && event.kind === "answered",
-    );
-    if (answered?.kind === "answered" && answered.payload.decision === "answered") {
-      const { answer } = answered.payload;
-      if (isBranchPort(answer)) return answer;
-    }
-    const name = settings.value ?? "";
-    const read = producedAnswer(before, producersOf(manifest.nodes, name), name);
-    if (read.kind === "value") return portOf(read.answer);
-    throw new Error(`Branch "${branch.id}" has no yes/no answer for "${name}" in this run.`);
-  }
-
-  private async ownDecision(
-    branch: ManifestNode,
-    { manifest }: RunContext,
-  ): Promise<{ port: BranchPort; asked: boolean } | { failure: Failure }> {
-    const settings = branch.settings as BranchSettings;
-    if (!decidedByValue(settings)) {
-      return { port: this.variableDecision(branch, manifest), asked: false };
-    }
-    const name = settings.value ?? "";
-    const action = this.takeAction(branch.id);
-    const read =
-      action?.kind === "reuse"
-        ? undefined
-        : producedAnswer(this.allEvents(), producersOf(manifest.nodes, name), name);
-    if (read?.kind === "value") return { port: portOf(read.answer), asked: false };
-    const outcome = await this.waitFor(
-      branch,
-      valueRequest(branch.id, name, read?.reason ?? "asked before"),
-      (reply) => valueAnswer(branch.id, name, reply),
-      action,
-    );
-    return this.askedPort(branch.id, outcome);
-  }
-
-  private askedPort(
-    nodeId: string,
-    outcome: HumanOutcome,
-  ): { port: BranchPort; asked: boolean } | { failure: Failure } {
-    if (outcome.status === "failed") return { failure: { nodeId, reason: outcome.reason } };
-    const answer = outcome.decision.decision === "answered" ? outcome.decision.answer : "";
-    if (!isBranchPort(answer))
-      return { failure: { nodeId, reason: `unexpected answer: ${answer}` } };
-    return { port: answer, asked: true };
+    const port = this.decide(branch, events.slice(0, decidedAt));
+    if (port === undefined)
+      throw new Error(`Branch "${branch.id}" has no yes/no value in this run.`);
+    return port;
   }
 
   private async compactIfFull(nodeId: string, ensureStarted: () => Promise<void>): Promise<void> {
@@ -651,49 +601,6 @@ export class Runner {
     }
   }
 
-  private async holdForFiles(nodeId: string, context: RunContext): Promise<StepResult | undefined> {
-    if (this.status(nodeId) !== "waiting") return undefined;
-    const { nodes } = context.manifest;
-    for (const { file, writers } of handoffPairs(nodes).filter((pair) => pair.reader === nodeId)) {
-      const content = await readOrMissing(this.deps.files, listPath(this.deps.cwd, file));
-      if (content === undefined || content === (await this.templateOf(file))) {
-        const ran = writers.filter((writer) => this.status(writer) === "done");
-        const named = (ran.length > 0 ? ran : writers).map(
-          (writer) => nodes.find((node) => node.id === writer)?.label ?? writer,
-        );
-        const reason = `${file} wasn't written by ${named.join(", ")}`;
-        this.recordAll([
-          { nodeId, event: { kind: "running" } },
-          {
-            nodeId,
-            event: { kind: "failed", payload: { message: `${nodeId} failed: ${reason}` } },
-          },
-        ]);
-        return { failure: { nodeId, reason } };
-      }
-    }
-    return undefined;
-  }
-
-  private async templateOf(file: string): Promise<string | undefined> {
-    if (!hasTemplate(file)) return undefined;
-    const { cwd, files } = this.deps;
-    return readOrMissing(files, `${cwd.slice(0, cwd.lastIndexOf("/"))}/${templatePath(file)}`);
-  }
-
-  private async copyTemplates(nodeId: string, context: RunContext): Promise<void> {
-    const { cwd, files } = this.deps;
-    const written = handoffPairs(context.manifest.nodes)
-      .filter((pair) => pair.writers.includes(nodeId))
-      .map((pair) => pair.file);
-    for (const file of new Set(written)) {
-      const target = listPath(cwd, file);
-      if ((await readOrMissing(files, target)) !== undefined) continue;
-      const template = await this.templateOf(file);
-      if (template !== undefined) await files.writeFile(target, template);
-    }
-  }
-
   private async runSection(fork: ManifestNode, context: RunContext): Promise<StepResult> {
     const action = this.takeAction(fork.id);
     const section = context.sections.find((candidate) => candidate.fork === fork.id);
@@ -715,11 +622,6 @@ export class Runner {
     const { wait, onBranchFail = "stop" } = join?.settings as JoinSettings;
     if (joinComplete(wait, [...kept, ...rerun], new Set(kept))) {
       return this.completeFromKept({ ...section, branches: rerun });
-    }
-    for (const branch of rerun) {
-      const held = await this.holdForFiles(branch, context);
-      if (held !== undefined) return held;
-      await this.copyTemplates(branch, context);
     }
     await this.compactIfFull(fork.id, context.ensureStarted);
     this.inTurn = fork.id;
@@ -743,6 +645,7 @@ export class Runner {
     const held = () => this.openAsks > 0;
     const settingsOf = (id: string) => context.nodes.find((node) => node.id === id)?.settings ?? {};
     const armedAt = this.deps.now?.() ?? Number.NEGATIVE_INFINITY;
+    let missed: string | undefined;
     const watch = new SectionWatch({
       events: this.deps.events,
       sessionId: this.deps.sessionId,
@@ -750,12 +653,21 @@ export class Runner {
       branchNodes: branches,
       onStopped: (id, message, toolUseId) => {
         stopped.add(id);
+        const stopMessage = typeof message === "string" ? message : undefined;
+        const { values, missing } = producedBy(settingsOf(id), stopMessage);
+        if (missing.length > 0) {
+          const line = `${id} failed: ${missingReason(missing)}`;
+          missed ??= line;
+          this.record(id, { kind: "failed", payload: { message: line } });
+          this.emit(line);
+          return;
+        }
         this.record(id, {
           kind: "done",
           payload: {
-            ...(typeof message === "string" ? { stopMessage: message } : {}),
+            ...(stopMessage === undefined ? {} : { stopMessage }),
             ...(toolUseId === undefined ? {} : { toolUseIds: [toolUseId] }),
-            ...producedPayload(settingsOf(id), typeof message === "string" ? message : undefined),
+            ...variablesPayload(values),
           },
         });
         this.emit(`${id} done`);
@@ -803,6 +715,7 @@ export class Runner {
       } catch (error) {
         return this.failSection(section, stopped, messageOf(error));
       }
+      if (missed !== undefined) return this.failSection(section, stopped, missed);
       this.record(join, { kind: "done" });
       this.emit(`${join} done`);
       this.finishTurn({ id: fork }, stopMessage);
@@ -963,12 +876,14 @@ export class Runner {
     stopMessage: string | undefined,
     condition?: string,
     toolUseIds: readonly string[] = [],
-  ) {
+  ): TurnResult {
     const nodeId = node.id;
+    const { values, missing } = producedBy(node.settings ?? {}, stopMessage);
+    if (missing.length > 0) return { failure: missingReason(missing) };
     const payload = {
       ...(stopMessage === undefined ? {} : { stopMessage }),
       ...(toolUseIds.length === 0 ? {} : { toolUseIds: [...toolUseIds] }),
-      ...producedPayload(node.settings ?? {}, stopMessage),
+      ...variablesPayload(values),
     };
     this.record(
       nodeId,

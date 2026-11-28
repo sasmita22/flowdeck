@@ -93,16 +93,26 @@ describe("donePayload", () => {
     expect(nodeStatus([sent, done])).toBe("done");
   });
 
-  it("round-trips the value a producing Agent answered", () => {
+  it("round-trips every variable a producing Agent set", () => {
     const done: RunEvent = {
       kind: "done",
-      payload: { stopMessage: "Checked.", produced: { name: "tests-passed", answer: true } },
+      payload: { stopMessage: "Checked.", variables: { approved: true, docs: false } },
     };
 
     expect(stored(done.payload)).toEqual({
       stopMessage: "Checked.",
-      produced: { name: "tests-passed", answer: true },
+      variables: { approved: true, docs: false },
     });
+  });
+
+  it("rejects the old single produced value", () => {
+    expect(
+      donePayload.safeParse({ produced: { name: "tests-passed", answer: true } }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a variable that is not true or false", () => {
+    expect(donePayload.safeParse({ variables: { approved: "yes" } }).success).toBe(false);
   });
 
   it.each([{}, { stopMessage: "DONE" }])(

@@ -23,6 +23,7 @@ const report = {
   kind: "workflow" as const,
   buildConfig: { repo: "/code/shop" },
   variables: [],
+  sends: [],
   sessions: [],
   uses: [],
   pinned: false,

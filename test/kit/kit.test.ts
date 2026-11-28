@@ -19,7 +19,6 @@ const skillNames = [
   "extract-shared",
   "fit-to-repo",
   "write-agent",
-  "write-handoff-template",
   "write-skill",
   "write-workspace-rules",
 ];
@@ -85,7 +84,7 @@ describe("the build kit", () => {
     expect(JSON.parse(manifest)).toMatchObject({ name: "flowdeck-build" });
   });
 
-  it("has exactly the ten build skills", () => {
+  it("has exactly the nine build skills", () => {
     expect(kitSkillDirs().sort()).toEqual([...skillNames].sort());
   });
 
@@ -133,7 +132,6 @@ describe("the build kit", () => {
     ["audit-duplicates", ["merges", "keptApart"]],
     ["write-skill", ["mixedJobs"]],
     ["write-agent", ["mixedJobs"]],
-    ["write-handoff-template", ["questions"]],
     ["analyze-job", ["needs"]],
     ["extract-shared", ["shared"]],
   ])("%s names the build-report.json fields it writes, with their entry shape", (name, fields) => {
@@ -176,17 +174,6 @@ describe("the build kit", () => {
     }
   });
 
-  it.each(["write-handoff-template", "audit-handoffs", "write-agent"])(
-    "skill %s lets a node's own instructions narrow its file's form over the template",
-    (name) => {
-      expect(skill(name)).toContain("the node's own instructions win");
-    },
-  );
-
-  it("audit-handoffs never asks about a node narrowing its template", () => {
-    expect(skill("audit-handoffs")).toMatch(/starting point, not a contract[^\n]*never a question/);
-  });
-
   it("audit-duplicates merges same-job nodes whatever their output layout or wording, never asking", () => {
     expect(skill("audit-duplicates")).toMatch(
       /layout or wording[^\n]*never block a merge[^\n]*never a question/,
@@ -208,7 +195,6 @@ describe("the build kit", () => {
     "skills/write-agent/SKILL.md",
     "skills/audit-orchestrator/SKILL.md",
     "skills/audit-duplicates/SKILL.md",
-    "skills/write-handoff-template/SKILL.md",
   ])("%s says a question is only for a blueprint input", (path) => {
     const content = readKit(path);
 
@@ -402,6 +388,15 @@ describe("the build kit", () => {
       /\bPrompt\b|\bScript\b|write-step|write-script|step skill|script:</,
     );
   });
+
+  it.each(kitFiles())(
+    "%s names no given or writes setting, no hand-off template and no Branch decided by a value",
+    (file) => {
+      expect(readKit(file)).not.toMatch(
+        /`given`|`writes`|plugin\/templates|@template|write-handoff-template|decided by a value/,
+      );
+    },
+  );
 
   it.each(kitFiles())("%s names no File wire", (file) => {
     expect(readKit(file)).not.toMatch(/\bfile`?[- ]wires?\b/i);

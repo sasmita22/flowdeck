@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -212,9 +212,44 @@ describe("run controls", () => {
     it("offers the same Run choices whether or not the build has an Always Gate", async () => {
       expect(await call("run-options", { buildId: await builtId(alwaysGate()) })).toEqual({
         kind: "choices",
+        variables: [],
       });
-      expect(await call("run-options", { buildId: await builtId(branchOn("deep")) })).toEqual({
+    });
+
+    it("offers each not-defined yes/no variable with the build's value, and no text variable", async () => {
+      const ticketed = onWorkspaceMainFlow(
+        [
+          agent("plan", { settings: { instructions: "Fix {{ticket}}." } }),
+          branch("b", "deep"),
+          agent("yes"),
+          agent("no"),
+        ],
+        [thenWire("plan", "b"), wire("b", "yes", "yes", "in"), wire("b", "no", "no", "in")],
+      );
+      const buildId = await builtId(ticketed, { deep: true, ticket: "FD-1" });
+
+      expect(await call("run-options", { buildId })).toEqual({
         kind: "choices",
+        variables: [{ name: "deep", value: true }],
+      });
+    });
+
+    it("offers no variable an Agent defines before its Branch", async () => {
+      const defined = onWorkspaceMainFlow(
+        [
+          agent("check", {
+            settings: { produces: [{ variable: "deep", yesIf: "big", noIf: "small" }] },
+          }),
+          branch("b", "deep"),
+          agent("yes"),
+          agent("no"),
+        ],
+        [thenWire("check", "b"), wire("b", "yes", "yes", "in"), wire("b", "no", "no", "in")],
+      );
+
+      expect(await call("run-options", { buildId: await builtId(defined) })).toEqual({
+        kind: "choices",
+        variables: [],
       });
     });
 
@@ -235,7 +270,7 @@ describe("run controls", () => {
       expect(runs.findRun(runId)?.inputs).toEqual({});
     });
 
-    it("takes Branch's path from the build's yes/no value, ignoring Trigger flags and inputs sent with the run", async () => {
+    it("takes Branch's path from the build's yes/no value, ignoring Trigger flags sent with the run", async () => {
       const buildId = await builtId(branchOn("deep"), { deep: false });
 
       const runId = await startOn(buildId, { inputs: { ticket: "FD-1" }, flags: { deep: true } });
@@ -244,6 +279,25 @@ describe("run controls", () => {
       expect(statusOf(runId, "yes")).toBe("skipped");
       expect(statusOf(runId, "no")).toBe("done");
       expect(runs.findRun(runId)?.inputs).toEqual({});
+    });
+
+    it("takes the yes/no value sent with the run over the build's, stores it with the run and leaves the build's", async () => {
+      const buildId = await builtId(branchOn("deep"), { deep: false });
+
+      const runId = await startOn(buildId, { variables: { deep: true } });
+
+      expect(await finished(runId)).toBe("done");
+      expect(statusOf(runId, "yes")).toBe("done");
+      expect(statusOf(runId, "no")).toBe("skipped");
+      expect(runs.findRun(runId)?.inputs).toEqual({ variables: { deep: true } });
+      const manifest = JSON.parse(
+        await readFile(join(buildDirOf(buildId), "manifest.json"), "utf8"),
+      ) as { values: Record<string, unknown> };
+      expect(manifest.values).toEqual({ deep: false });
+      expect(await call("run-options", { buildId })).toEqual({
+        kind: "choices",
+        variables: [{ name: "deep", value: false }],
+      });
     });
   });
 
@@ -764,6 +818,27 @@ describe("run controls", () => {
       expect(await finished(runId)).toBe("done");
       expect(claude.sentTo("s1")).toHaveLength(1);
       expect(["s1", "s2", "s3"].map((id) => statusOf(runId, id))).toEqual(["done", "done", "done"]);
+    });
+
+    it("keeps the run's own yes/no value on resume", async () => {
+      let s1Turns = 0;
+      withClaude((nodeId) => (nodeId === "s1" && ++s1Turns === 1 ? "hold" : "done"));
+      const buildId = await builtId(
+        onWorkspaceMainFlow(
+          [agent("s1"), branch("b", "deep"), agent("yes"), agent("no")],
+          [thenWire("s1", "b"), wire("b", "yes", "yes", "in"), wire("b", "no", "no", "in")],
+        ),
+        { deep: false },
+      );
+      const runId = await startOn(buildId, { variables: { deep: true } });
+      await vi.waitFor(() => expect(statusOf(runId, "s1")).toBe("sent"));
+      await call("stop-run", { runId });
+
+      expect(started(await call("resume-run", { runId }))).toBe(runId);
+
+      expect(await finished(runId)).toBe("done");
+      expect(statusOf(runId, "yes")).toBe("done");
+      expect(statusOf(runId, "no")).toBe("skipped");
     });
 
     it("refuses a stopped run while another run of its build is going, leaving it stopped", async () => {

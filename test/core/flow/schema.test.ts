@@ -273,8 +273,13 @@ describe("parseFlow on a blueprint in the current shape", () => {
       nodes: [
         triggerNode({}),
         branchNode({ variable: "e2e" }),
-        agent("plan", { settings: { instructions: "Fix {{ticket}}", writes: ["plan.md"] } }),
-        agent("build", { settings: { given: ["plan.md"] } }),
+        agent("plan", {
+          settings: {
+            instructions: "Fix {{ticket}}",
+            produces: [{ variable: "approved", yesIf: "it reads well", noIf: "it does not" }],
+          },
+        }),
+        agent("build"),
       ],
       wires: [thenWire("plan", "build")],
       containers: [workspace, sessionContainer({ nodes: ["start", "b", "plan", "build"] })],

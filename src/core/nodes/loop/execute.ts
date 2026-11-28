@@ -1,5 +1,6 @@
 import type { HumanDecision, WaitReply, WaitRequest } from "../../run/wait.js";
-import { agentCallText, yesNoEntry, type AgentTurnNode } from "../agent/execute.js";
+import { agentCallText, producedObject, type AgentTurnNode } from "../agent/execute.js";
+import { verdictKey, type ProduceRow } from "../agent/settings.js";
 
 export type LoopStep = { kind: "exit" } | { kind: "round"; round: number } | { kind: "cap" };
 
@@ -13,8 +14,8 @@ export function verdictRequest(condition: string): string {
   return `End your reply with a fenced code block tagged json that holds {"done": true} if this condition holds, else {"done": false}. Condition: ${oneLine(condition)}`;
 }
 
-function verdictAndValueRequest(condition: string, name: string): string {
-  return `End your reply with a fenced code block tagged json that holds one object with "done": true if this condition holds, else "done": false, and your yes/no answer for ${JSON.stringify(name)}: ${yesNoEntry(name, true)} for yes, else ${yesNoEntry(name, false)}. Condition: ${oneLine(condition)}`;
+function verdictAndValueRequest(condition: string, rows: readonly ProduceRow[]): string {
+  return `End your reply with a fenced code block tagged json that holds one object with "done": true if this condition holds, else "done": false, and every variable of the object the agent ended with, for example ${producedObject([verdictKey, ...rows.map((row) => row.variable)])}. Condition: ${oneLine(condition)}`;
 }
 
 export function agentVerdictTurnText(
@@ -24,10 +25,9 @@ export function agentVerdictTurnText(
   condition: string,
   answers: readonly string[] = [],
 ): string {
+  const rows = node.produces ?? [];
   const request =
-    node.produces === undefined
-      ? verdictRequest(condition)
-      : verdictAndValueRequest(condition, node.produces);
+    rows.length === 0 ? verdictRequest(condition) : verdictAndValueRequest(condition, rows);
   return `${agentCallText(prefix, piece, node, answers)} ${request}`;
 }
 

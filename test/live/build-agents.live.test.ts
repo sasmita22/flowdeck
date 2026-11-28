@@ -19,8 +19,7 @@ import type { Manifest, ManifestNode } from "../../src/core/compiler/lower.js";
 import { pieceNames } from "../../src/core/compiler/pieces.js";
 import { scopeLine, scopeOf } from "../../src/core/compiler/scope-line.js";
 import type { Flow } from "../../src/core/flow/schema.js";
-import type { Handoff } from "../../src/core/flow/handoff.js";
-import { agentPrompt } from "../../src/core/nodes/agent/execute.js";
+import { agentPrompt, agentTurnNode } from "../../src/core/nodes/agent/execute.js";
 import { agent, asWorkflow, onMainFlow } from "../fixtures/flow-builders.js";
 import { killTmuxServer, removeClaudeSessions, sleep } from "../fixtures/live-claude.js";
 import {
@@ -52,7 +51,6 @@ const kitSkills = [
   "extract-shared",
   "fit-to-repo",
   "write-agent",
-  "write-handoff-template",
   "write-skill",
   "write-workspace-rules",
 ];
@@ -135,8 +133,6 @@ type AgentSpec = {
   id: string;
   label: string;
   instructions: string;
-  given?: string[];
-  writes?: string[];
 };
 
 const at = (x: number) => ({ x, y: 0 });
@@ -161,8 +157,6 @@ function liveFlow(steps: AgentSpec[]): Flow {
             role: "",
             instructions: step.instructions,
             model: "haiku",
-            ...(step.given === undefined ? {} : { given: step.given }),
-            ...(step.writes === undefined ? {} : { writes: step.writes }),
           },
         })),
         {
@@ -218,10 +212,7 @@ const nodeOf = (manifest: Manifest, id: string): ManifestNode => {
   return node;
 };
 
-const detailsOf = (node: ManifestNode): string => {
-  const { given = [], writes = [] } = node.settings as Partial<Handoff>;
-  return agentPrompt({ id: node.id, given, writes });
-};
+const detailsOf = (node: ManifestNode): string => agentPrompt(agentTurnNode(node));
 
 const endReport = (built: EndedBuild) => buildReportSchema.parse(built.outcome.report);
 
@@ -290,13 +281,11 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build agents with real claud
             label: "Review code",
             instructions:
               "Review the code under src/ and write the problems you find to review.md.",
-            writes: ["review.md"],
           },
           {
             id: "p1",
             label: "Share review",
             instructions: "Read review.md and reply with its first problem in one line.",
-            given: ["review.md"],
           },
         ]);
         expect(JSON.stringify(flow)).not.toContain(gate);
@@ -347,13 +336,11 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build agents with real claud
             id: "a1",
             label: "Review greet.js",
             instructions: "Read src/greet.js and list any bugs you find.",
-            writes: ["review-1.md"],
           },
           {
             id: "a2",
             label: "Look for defects",
             instructions: "Go over the code in src/greet.js and report the defects in it.",
-            writes: ["review-2.md"],
           },
         ]);
 

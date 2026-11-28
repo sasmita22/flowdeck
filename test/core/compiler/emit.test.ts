@@ -5,7 +5,6 @@ import { emptyReport } from "../../../src/core/compiler/build-report.js";
 import { canonicalJson } from "../../../src/core/compiler/canonical-json.js";
 import { emit, workspaceClaudeMd } from "../../../src/core/compiler/emit.js";
 import { guardHookFiles } from "../../../src/core/compiler/guard-hooks.js";
-import { handoffTemplates } from "../../../src/core/compiler/handoff-templates.js";
 import {
   buildHookCommand,
   containerStartCommand,
@@ -25,17 +24,14 @@ import {
   thenWire,
   twoSessionWorkflow,
 } from "../../fixtures/flow-builders.js";
-import { expectBareHandoffRule, nestedHandoffPaths } from "../../fixtures/handoff.js";
+import { expectBareHandoffRule } from "../../fixtures/handoff.js";
 
 const sample = (
   permissionMode = "acceptEdits",
   session = { repo: "/Users/dev/code/carousell-web", branch: "release/2026-11" },
 ) =>
   flow(
-    [
-      agent("p", { settings: { writes: ["plan.md"] } }),
-      agent("a", { settings: { given: ["plan.md"] } }),
-    ],
+    [agent("p"), agent("a")],
     [thenWire("p", "a")],
     { ...flowSettings, permissionMode },
     { session },
@@ -112,7 +108,6 @@ describe("emit", () => {
       "sessions/main/plugin/hooks/no-force-push.sh",
       "sessions/main/plugin/hooks/rules-after-compact.sh",
       "sessions/main/plugin/skills/run/SKILL.md",
-      "sessions/main/plugin/templates/plan.md",
       "sessions/main/settings.json",
       "workspace/CLAUDE.md",
       "workspace/plugin/.claude-plugin/plugin.json",
@@ -140,26 +135,6 @@ describe("emit", () => {
       inRoot("plugin/agents/p.md"),
       inRoot("plugin/agents/a.md"),
     ]);
-  });
-
-  it("writes one hand-off template per hand-off file", () => {
-    const files = emitted();
-    const templates = handoffTemplates(sample(), "carousell-web");
-
-    expect(templates.map((template) => template.path)).toEqual(["plugin/templates/plan.md"]);
-    for (const template of templates) {
-      expect(fileAt(files, inRoot(template.path))).toBe(template.content);
-    }
-  });
-
-  it("names no hand-off file of the flow under the repo folder in any emitted file", () => {
-    const nested = emitted().flatMap((file) =>
-      nestedHandoffPaths(file.content, "carousell-web", ["plan.md"]).map(
-        (path) => `${file.path}: ${path}`,
-      ),
-    );
-
-    expect(nested).toEqual([]);
   });
 
   it("writes the orchestrator from the lowered manifest, scoped to this build, repo folder and workspace", () => {

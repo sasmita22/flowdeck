@@ -3,12 +3,13 @@ import {
   blueprintKind,
   expandedOrAsIs,
   kindResolver,
+  libraryLookup,
   libraryUses,
   reachedSessions,
   type LibraryResolver,
 } from "./libraries.js";
 import { BuildConfig, Flow, SessionContainer } from "./schema.js";
-import { FoundVariable, foundVariables, groupVariables } from "./variables.js";
+import { FoundVariable, blueprintVariables, groupVariables } from "./variables.js";
 
 export interface SavedFlowRef {
   flowId: string;
@@ -40,21 +41,24 @@ export const flowSummarySchema = z.object({
     SessionContainer.pick({ id: true, name: true, repo: true, branch: true, model: true }),
   ),
   uses: z.array(z.string()),
+  sends: z.array(z.string()),
 });
 
 export type FlowSummary = z.infer<typeof flowSummarySchema>;
 
-type BlueprintFacts = Pick<FlowSummary, "kind" | "variables" | "sessions" | "uses">;
+type BlueprintFacts = Pick<FlowSummary, "kind" | "variables" | "sessions" | "uses" | "sends">;
 
 export function blueprintFacts(flow: Flow, resolve: LibraryResolver): BlueprintFacts {
   const kind = blueprintKind(flow, kindResolver(resolve));
   const expanded = expandedOrAsIs(flow, resolve);
+  const { toAsk, sends } = blueprintVariables(expanded.flow, libraryLookup(resolve));
   return {
     kind,
-    variables: groupVariables(foundVariables(expanded.flow), expanded.uses),
+    variables: groupVariables(toAsk, expanded.uses),
     sessions:
       kind === "node-library" || kind === "session-library" ? reachedSessions(expanded.flow) : [],
     uses: libraryUses(flow),
+    sends,
   };
 }
 
@@ -63,6 +67,7 @@ export const noBlueprintFacts: BlueprintFacts = {
   variables: [],
   sessions: [],
   uses: [],
+  sends: [],
 };
 
 /**

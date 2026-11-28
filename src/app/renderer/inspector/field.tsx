@@ -19,6 +19,16 @@ const rowStyle: CSSProperties = {
   fontSize: "var(--fs-sm)",
 };
 
+const rowSetStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 4,
+  margin: 0,
+  padding: "6px 8px",
+  border: "1px solid var(--line)",
+  borderRadius: 4,
+};
+
 const issueStyle: CSSProperties = {
   color: "var(--warn)",
   fontSize: "var(--fs-xs)",
@@ -69,8 +79,8 @@ export function Field({
   const stored = JSON.stringify(raw);
   const stillRefused = refused !== null && refused.stored === stored ? refused.reason : undefined;
   const issue = stillRefused ?? issues[field.path.join(".")];
-  const send = (next: FieldValue) => {
-    const reason = commit(field.path, next);
+  const send = (next: FieldValue, path: Path = field.path) => {
+    const reason = commit(path, next);
     setRefused(reason === null ? null : { reason, stored });
     if (reason !== null) setAttempt((count) => count + 1);
   };
@@ -80,6 +90,76 @@ export function Field({
   };
   const key = `${value}#${attempt}`;
 
+  if (field.control === "rows") {
+    return (
+      <>
+        <span style={labelStyle} data-testid={field.testId}>
+          {field.label}
+        </span>
+        {field.rows.map((row, index) => (
+          <fieldset key={row.removeTestId} style={rowSetStyle}>
+            {row.fields.map((child) => (
+              <Field
+                key={child.testId}
+                field={child}
+                values={values}
+                commit={commit}
+                issues={issues}
+              />
+            ))}
+            <button
+              type="button"
+              data-testid={row.removeTestId}
+              onClick={() => send({ row: "remove" }, [...field.path, String(index)])}
+            >
+              Remove
+            </button>
+          </fieldset>
+        ))}
+        <button type="button" data-testid={field.addTestId} onClick={() => send({ row: "add" })}>
+          {field.addLabel}
+        </button>
+        <Issue testId={field.testId} text={issue} />
+      </>
+    );
+  }
+  if (field.control === "combo") {
+    return (
+      <>
+        <label style={labelStyle}>
+          {field.label}
+          <input
+            key={key}
+            data-testid={field.testId}
+            type="text"
+            defaultValue={value}
+            onBlur={(event) => sendIfChanged(event.target.value)}
+            onKeyDown={blurOnEnter}
+          />
+        </label>
+        {field.options.length > 0 && (
+          <label style={labelStyle}>
+            Use existing
+            <select
+              data-testid={field.existingTestId}
+              value=""
+              onChange={(event) => send({ pick: event.target.value })}
+            >
+              <option value="" disabled>
+                Choose…
+              </option>
+              {field.options.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        <Issue testId={field.testId} text={issue} />
+      </>
+    );
+  }
   if (field.control === "select") {
     return (
       <>
