@@ -135,6 +135,8 @@ export const workspaceTmuxVariable = "FD_WORKSPACE_TMUX";
 
 export const sessionStatesVariable = "FD_SESSION_STATES";
 
+export const runChoicesVariable = "FD_RUN_CHOICES";
+
 const forwardedVariables = [
   "FLOWDECK_SOCK",
   nodeVariable,
@@ -170,5 +172,5 @@ export function containerStartCommand({
     undefined,
     [workspaceDir],
   );
-  return `tmux -L ${tmux} new-session -d -s ${tmux} -c ${shellQuote(worktree)} ${forwarded} ${claude} ${shellQuote(`/${container.prefix}:run`)}`;
+  return `tmux -L ${tmux} new-session -d -s ${tmux} -c ${shellQuote(worktree)} ${forwarded} ${claude} ${shellQuote(`/${container.prefix}:run`)}"\${${runChoicesVariable}:+ $${runChoicesVariable}}"`;
 }

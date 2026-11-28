@@ -9,6 +9,7 @@ import {
 } from "./emit.js";
 import type { BuildFile, Manifest, ManifestContainer, ManifestNode } from "./lower.js";
 import { stopsTheRun } from "../run/stop-marker.js";
+import { producedRows } from "../nodes/agent/execute.js";
 import { containerRoot, pieceOf } from "./pieces.js";
 import { scopeLine, scopeOf } from "./scope-line.js";
 import { sharedContainer, sharedPath } from "./shared.js";
@@ -206,7 +207,11 @@ const checkContainer = (
   if (orchestrator === undefined) fail(orchestratorPath, "missing", "the orchestrator is missing");
   else if (marked.join("\n") !== expected.join("\n"))
     fail(orchestratorPath, "orchestrator", "NODE markers do not follow the manifest's order");
-  for (const node of container.nodes.filter(stopsTheRun)) {
+  const stopping = container.nodes.filter(
+    (node) =>
+      stopsTheRun(node) || (node.type === "agent" && producedRows(node.settings).length > 0),
+  );
+  for (const node of stopping) {
     const marker = `\`${stopMarker(node.id)}\``;
     const step = stepLines.find((candidate) => candidate.id === node.id);
     if (step !== undefined && !step.line.includes(marker))

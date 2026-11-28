@@ -592,7 +592,7 @@ describe("emit per container", () => {
       expect(text).toContain("at most once per run; it returns at once");
     });
 
-    it("gives each command the container's tmux variable, plugin, settings, the workspace folder, its model and its orchestrator", async () => {
+    it("gives each command the container's tmux variable, plugin, settings, the workspace folder, its model and its orchestrator with the run's choices", async () => {
       const { text, sessions } = await listed();
       const lines = text.split("\n");
 
@@ -607,7 +607,9 @@ describe("emit per container", () => {
         expect(command).toContain(`--settings '${dir}/sessions/${container.slug}/settings.json'`);
         expect(command).toContain(`--add-dir '${dir}/workspace'`);
         expect(command).toContain(`--model '${container.model}'`);
-        expect(command).toContain(`'/${container.prefix}:run'`);
+        expect(
+          command.endsWith(`'/${container.prefix}:run'"\${FD_RUN_CHOICES:+ $FD_RUN_CHOICES}"`),
+        ).toBe(true);
       }
     });
 

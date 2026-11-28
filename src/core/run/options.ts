@@ -38,14 +38,28 @@ const storedVariables = (stored: Record<string, unknown>): Record<string, unknow
     : {};
 };
 
+const acceptedOverrides = (
+  build: VariableValues | undefined,
+  stored: Record<string, unknown>,
+): [string, boolean][] =>
+  Object.entries(storedVariables(stored)).flatMap(([name, value]) =>
+    typeof value === "boolean" && typeof build?.[name] === "boolean"
+      ? [[name, value] as [string, boolean]]
+      : [],
+  );
+
 export const runValues = (
   build: VariableValues | undefined,
   stored: Record<string, unknown>,
-): VariableValues => {
-  const overrides = Object.entries(storedVariables(stored)).flatMap(([name, value]) =>
-    typeof value === "boolean" && typeof build?.[name] === "boolean"
-      ? [[name, value] as const]
-      : [],
-  );
-  return { ...build, ...Object.fromEntries(overrides) };
+): VariableValues => ({ ...build, ...Object.fromEntries(acceptedOverrides(build, stored)) });
+
+export const runChoicesText = (
+  stored: Record<string, unknown>,
+  build: VariableValues | undefined,
+): string => {
+  const overrides = acceptedOverrides(build, stored)
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([name, value]) => `${name}=${value ? "yes" : "no"}`);
+  const parts = [...(storedAuto(stored) ? ["auto mode"] : []), ...overrides];
+  return parts.length === 0 ? "" : `Run choices: ${parts.join(", ")}`;
 };

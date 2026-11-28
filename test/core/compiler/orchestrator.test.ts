@@ -151,12 +151,21 @@ describe("orchestratorSkill", () => {
     expect(line).toContain("wait");
   });
 
-  it("asks in the chat for an Always Gate, showing its Instruction, and waits for the answer", () => {
+  it("says the run's choices are the Run choices text after the run command, and what to do with none", () => {
+    const { content } = skill();
+    const header = content.split("\n").find((line) => line.includes("Run choices:")) ?? "";
+
+    expect(header).toContain("`/fix-login-main:run`");
+    expect(header).toMatch(/with none, ask at every Always Gate and use the build summary/i);
+    expect(stepLines(content)).not.toContain(header);
+  });
+
+  it("goes on past an Always Gate in auto mode, else asks in the chat showing its Instruction and waits", () => {
     expect(lineOf(skill().content, "g")).toBe(
-      '4. NODE g (g): ask in the chat: "Check the plan", and wait for the answer before going on. Then go on to NODE k.',
+      '4. NODE g (g): if the run\'s choices say auto mode, go on without asking; otherwise ask in the chat: "Check the plan", and wait for the answer before going on. Then go on to NODE k.',
     );
     expect(lineOf(skill().content, "k")).toMatch(
-      /ask in the chat: "Pick a colour", and wait for the answer before going on\./,
+      /if the run's choices say auto mode, go on without asking; otherwise ask in the chat: "Pick a colour", and wait for the answer before going on\./,
     );
     expect(skill().content).not.toContain("may be skipped");
   });
@@ -174,15 +183,16 @@ describe("orchestratorSkill", () => {
     expect(lineOf(content, "l")).toMatch(/repeat.*NODE la.*tests pass.*at most 4 rounds/);
   });
 
-  it("reads a Branch's variable that no Agent produces from the build summary and names both ways", () => {
+  it("reads a Branch's variable that no Agent produces from the run's choices, then the build summary, and names both ways", () => {
     const line = lineOf(skill().content, "b");
 
-    expect(line).toMatch(/proceed.*build summary.*yes.*NODE f.*no.*NODE h/i);
+    expect(line).toMatch(/proceed.*run's choices.*build summary.*yes.*NODE f.*no.*NODE h/i);
+    expect(line).not.toMatch(/ask/i);
     expect(line).not.toMatch(/json answer/);
     expect(line).not.toMatch(/decided/i);
   });
 
-  it("reads a Branch's variable from the latest Agent producing it, else the build summary, asking rather than guessing", () => {
+  it("reads a Branch's variable from the latest Agent producing it, then the run's choices, then the build summary, never asking", () => {
     const line = lineOf(
       skill(
         flow(
@@ -207,12 +217,45 @@ describe("orchestratorSkill", () => {
       "b",
     );
 
-    expect(line).toMatch(/tests-passed.*json answer.*NODE c/);
-    expect(line).toMatch(/NODE c.*build summary/i);
-    expect(line).toMatch(/missing|malformed|unreadable/i);
-    expect(line).toMatch(/ask/i);
-    expect(line).toMatch(/guess/i);
+    expect(line).toMatch(/tests-passed.*json answer.*NODE c.*run's choices.*build summary/i);
+    expect(line).not.toMatch(/ask/i);
+    expect(line).not.toMatch(/missing|malformed/i);
     expect(line).toMatch(/yes.*NODE y.*no.*NODE n/);
+  });
+
+  it("stops the run at a producing Agent whose json answer does not set what it produces", () => {
+    const line = lineOf(
+      skill(
+        flow(
+          [trigger("t"), labelled(agent("c", { settings: { produces: [testsPassed] } }), "Check")],
+          [thenWire("t", "c")],
+        ),
+      ).content,
+      "c",
+    );
+
+    expect(line).toMatch(
+      /If its json answer does not set `tests-passed`, end your reply with the line `STOPPED NODE c` and end your turn\./,
+    );
+  });
+
+  it("stops the run at a producing Fork branch Agent the same way, and leaves other Agents without the line", () => {
+    const forked = sample();
+    const content = skill({
+      ...forked,
+      nodes: forked.nodes.map((node) =>
+        node.id === "x" && node.type === "agent"
+          ? { ...node, settings: { ...node.settings, produces: [testsPassed] } }
+          : node,
+      ),
+    }).content;
+
+    expect(lineOf(content, "x")).toMatch(/^\d+\. NODE x \(Check\): a branch of NODE f/);
+    expect(lineOf(content, "x")).toMatch(
+      /If its json answer does not set `tests-passed`, end your reply with the line `STOPPED NODE x` and end your turn\./,
+    );
+    expect(lineOf(content, "y")).not.toContain("STOPPED NODE");
+    expect(lineOf(content, "a")).not.toContain("STOPPED NODE");
   });
 
   it("dispatches an Agent that produces variables with the produce lines of agentPrompt", () => {
@@ -260,6 +303,12 @@ describe("orchestratorSkill", () => {
 
   it("states a Conditional Gate as a hard rule on its condition", () => {
     expect(lineOf(skill().content, "h")).toMatch(/hard rule.*tests fail/i);
+  });
+
+  it("leaves a Conditional Gate's line as it was, with no word of the run's choices", () => {
+    expect(lineOf(skill().content, "h")).toMatch(
+      /^\d+\. NODE h \(h\): hard rule: if tests fail, stop the run at once: show report, end your reply with the line `STOPPED NODE h` and end your turn\. Then go on to NODE o\.$/,
+    );
   });
 
   it("tells a Conditional Gate to show its Instruction and end its reply with the line naming its node", () => {

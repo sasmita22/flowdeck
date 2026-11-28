@@ -66,6 +66,25 @@ describe("sessionContinuePrompt", () => {
   });
 });
 
+describe("sessionContinuePrompt with the run's choices", () => {
+  const events = stored([
+    ["session-1-start", running],
+    ["session-1-start", done],
+  ]);
+  const today =
+    "/fix-login-android:run Already done: NODE session-1-start (Start). Carry on from NODE session-1-plan (Plan); do not redo the done steps.";
+
+  it("adds the run's choices after the prompt, one space apart", () => {
+    expect(sessionContinuePrompt(android, events, "Run choices: auto mode, go=yes")).toBe(
+      `${today} Run choices: auto mode, go=yes`,
+    );
+  });
+
+  it("is today's prompt when the run has no choices", () => {
+    expect(sessionContinuePrompt(android, events, "")).toBe(today);
+  });
+});
+
 describe("carryOnNode", () => {
   const start = node("start", "trigger", "Start");
   const stop = node("stop", "output", "Stop");

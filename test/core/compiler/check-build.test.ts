@@ -487,6 +487,37 @@ describe("checkBuild", () => {
       },
     );
 
+    const producing = (): Flow =>
+      onMainFlow(
+        [
+          labelled(
+            agent("c", {
+              settings: {
+                produces: [{ variable: "tests-passed", yesIf: "tests pass", noIf: "a test fails" }],
+              },
+            }),
+            "Check the tests",
+          ),
+          labelled(agent("s"), "Ship it"),
+        ],
+        [thenWire("c", "s")],
+      );
+
+    it("passes an orchestrator whose producing Agent keeps its stop line, asking none of an Agent that produces nothing", async () => {
+      expect(checkBuild(await workspace(producing()))).toEqual([]);
+    });
+
+    it("names the container when a producing Agent's step line lost its stop line", async () => {
+      const failures = checkBuild(
+        edited(await workspace(producing()), orchestrator, unmarked("c")),
+      );
+
+      expect(failures).toEqual([
+        expect.objectContaining({ file: orchestrator, rule: "stop-marker", container: "main" }),
+      ]);
+      expect(failures[0]?.detail).toContain("NODE c");
+    });
+
     it("names the orchestrator when a node's NODE marker is missing", async () => {
       expectFailsOn(
         edited(await workspace(), orchestrator, (content) =>

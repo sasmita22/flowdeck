@@ -34,9 +34,11 @@ export function carryOnNode(
 export function sessionContinuePrompt(
   container: ContinueContainer & { prefix: string },
   events: readonly StoredEvent[],
+  choices = "",
 ): string {
   const done = nodesIn(container, events, "done");
   const next = carryOnNode(container, events);
   const carryOnText = next === undefined ? "" : ` Carry on from ${named(next)};`;
-  return `/${container.prefix}:run Already done: ${done.map(named).join(", ")}.${carryOnText} do not redo the done steps.`;
+  const choicesText = choices === "" ? "" : ` ${choices}`;
+  return `/${container.prefix}:run Already done: ${done.map(named).join(", ")}.${carryOnText} do not redo the done steps.${choicesText}`;
 }

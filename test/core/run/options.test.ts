@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   runChoicesSchema,
+  runChoicesText,
   runValues,
   runVariables,
   storedAuto,
@@ -88,5 +89,34 @@ describe("runValues", () => {
     expect(runValues({ approved: false }, { variables: ["approved"] })).toEqual({
       approved: false,
     });
+  });
+});
+
+describe("runChoicesText", () => {
+  const build = { go: false, ready: true, ticket: "FD-1" };
+
+  it("is empty for a manual run with no overrides", () => {
+    expect(runChoicesText({}, build)).toBe("");
+  });
+
+  it("says auto mode for an automatic run", () => {
+    expect(runChoicesText({ auto: true }, build)).toBe("Run choices: auto mode");
+  });
+
+  it("puts auto mode first, then each override", () => {
+    expect(runChoicesText({ auto: true, variables: { go: true } }, build)).toBe(
+      "Run choices: auto mode, go=yes",
+    );
+  });
+
+  it.each([
+    { order: "ready first", variables: { ready: false, go: true } },
+    { order: "go first", variables: { go: true, ready: false } },
+  ])("lists a manual run's overrides in name order when given $order", ({ variables }) => {
+    expect(runChoicesText({ variables }, build)).toBe("Run choices: go=yes, ready=no");
+  });
+
+  it("ignores an override the build holds no yes/no value for", () => {
+    expect(runChoicesText({ variables: { ticket: true, other: false } }, build)).toBe("");
   });
 });

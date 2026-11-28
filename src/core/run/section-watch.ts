@@ -1,4 +1,5 @@
 import { agentCallOf } from "./agent-calls.js";
+import { replyOf } from "./produced-values.js";
 import { stampedBefore, turnFailure, type TurnEndEvent, type TurnEvents } from "./turns.js";
 
 type SectionWatchDeps = {
@@ -14,16 +15,6 @@ type Timer = ReturnType<typeof setTimeout>;
 const stampOf = (event: TurnEndEvent) => {
   const at = event.payload["flowdeck_hook_at"];
   return typeof at === "number" ? at : Number.POSITIVE_INFINITY;
-};
-
-const replyOf = (event: TurnEndEvent): string | undefined => {
-  const response = event.payload["tool_response"] as { content?: unknown } | undefined;
-  const content = Array.isArray(response?.content) ? (response.content as unknown[]) : [];
-  const texts = content.flatMap((part) => {
-    const text = (part as { text?: unknown } | null)?.text;
-    return typeof text === "string" ? [text] : [];
-  });
-  return texts.length === 0 ? undefined : texts.join("\n");
 };
 
 export class SectionWatch {
